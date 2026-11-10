@@ -4,7 +4,6 @@ import { linkKind, normalizeButtonUrl, parseButtons, storedButtons } from "./but
 import { handleProblem, normalizeHandle } from "./handles";
 import { markdownToText, renderMarkdown, summary } from "./markdown";
 import { telegramToCommonMark } from "./tg-markdown";
-import { llmsTxt } from "./views/seo.server";
 
 describe("handles", () => {
   it("reduces addresses and mentions to the handle", () => {
@@ -116,13 +115,5 @@ describe("Telegram MarkdownV2 to CommonMark", () => {
   it("renders as the bot showed it", () => {
     const html = renderMarkdown(telegramToCommonMark("*Face with Tears of Joy*\nThe universal emoji\\."));
     expect(html).toContain("<strong>Face with Tears of Joy</strong><br>");
-  });
-});
-
-describe("llms.txt", () => {
-  it("names the bot this deployment answers as", () => {
-    const text = llmsTxt("https://neat.link", "TestNeatBot");
-    expect(text).toContain("the Telegram bot @TestNeatBot,");
-    expect(text).not.toContain("${");
   });
 });

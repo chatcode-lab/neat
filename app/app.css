@@ -3,7 +3,9 @@
 /*
  * Design tokens. The palette is deliberately closed: resetting the defaults
  * means a utility like `text-gray-500` does not exist, so every surface uses
- * one of the semantic tokens below, and themes only change the tokens.
+ * one of the semantic tokens below, and themes only change the tokens. For
+ * now it is monochrome: the accent is the text colour; only danger and
+ * success have a hue.
  */
 @theme {
   /* The legacy pages' faces, served from this site: Inter for text and Rubik for a page's buttons. */
@@ -50,9 +52,9 @@
     --text: #1c1c1b;
     --text-muted: #5c5b58;
     --text-faint: #75746f;
-    --accent: #2f6fde;
+    --accent: #1c1c1b;
     --on-accent: #ffffff;
-    --accent-soft: #e9f0fd;
+    --accent-soft: #eeeeeb;
     --danger: #b42318;
     --danger-soft: #fdecea;
     --success: #1d7a43;
@@ -69,9 +71,9 @@
     --text: #f1f0ed;
     --text-muted: #aeada8;
     --text-faint: #8f8e89;
-    --accent: #7ea6ff;
+    --accent: #f1f0ed;
     --on-accent: #111111;
-    --accent-soft: #1c2740;
+    --accent-soft: #252524;
     --danger: #ff8a80;
     --danger-soft: #3d1a17;
     --success: #6fd49a;
@@ -94,9 +96,9 @@
       --text: #f1f0ed;
       --text-muted: #aeada8;
       --text-faint: #8f8e89;
-      --accent: #7ea6ff;
+      --accent: #f1f0ed;
       --on-accent: #111111;
-      --accent-soft: #1c2740;
+      --accent-soft: #252524;
       --danger: #ff8a80;
       --danger-soft: #3d1a17;
       --success: #6fd49a;
@@ -256,7 +258,7 @@
   }
   .btn-primary:hover {
     background: var(--accent);
-    filter: brightness(1.08);
+    opacity: 0.88;
   }
   .btn-danger {
     color: var(--danger);

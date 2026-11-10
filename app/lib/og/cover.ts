@@ -7,6 +7,9 @@ import type { FontMetrics } from "./metrics";
  * page's address under them, as the legacy covers had it.
  */
 
+/** Bumped when the cover's design changes, so every cover's address changes and caches draw it again. */
+export const COVER_DESIGN = "2";
+
 export const WIDTH = 1200;
 export const HEIGHT = 630;
 
@@ -15,7 +18,6 @@ const COLORS = {
   text: "#1c1c1b",
   muted: "#5c5b58",
   faint: "#8a8984",
-  accent: "#2f6fde",
   ring: "#e2e1dc",
   initialsGround: "#e7e6e1",
 } as const;
@@ -180,7 +182,7 @@ export function coverSvg(cover: Cover, fonts: Fonts): string {
   }
   y += 70;
   parts.push(
-    `<text x="${textX}" y="${y}" font-family="${FAMILY.semibold}" font-size="32" fill="${COLORS.accent}">${escape(drawable(cover.address, fonts.semibold))}</text>`,
+    `<text x="${textX}" y="${y}" font-family="${FAMILY.semibold}" font-size="32" fill="${COLORS.text}">${escape(drawable(cover.address, fonts.semibold))}</text>`,
   );
 
   const cx = left + side / 2;

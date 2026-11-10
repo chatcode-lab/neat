@@ -4,16 +4,16 @@ import { redirect, type RouterContextProvider } from "react-router";
 import { viewerContext } from "../context";
 import { authFor } from "./auth.server";
 import { type Account, accountRecord } from "./db/accounts.server";
+import { SESSION_COOKIE_PATTERN } from "./session-cookie";
 
 // Better Auth's session cookie, with or without the `__Secure-` prefix.
-const SESSION_COOKIE = /(?:^|;\s*)(?:__Secure-)?better-auth\.session_token=/;
 
 /**
  * The signed-in account from the session cookie, read from D1 every time.
  * Requests without the cookie skip the database.
  */
 export async function loadViewer(request: Request): Promise<Account | null> {
-  if (!SESSION_COOKIE.test(request.headers.get("Cookie") ?? "")) return null;
+  if (!SESSION_COOKIE_PATTERN.test(request.headers.get("Cookie") ?? "")) return null;
   const session = await authFor(request).api.getSession({ headers: request.headers, query: { disableCookieCache: true } });
   if (!session) return null;
   return accountRecord(env.DB, session.user.id);

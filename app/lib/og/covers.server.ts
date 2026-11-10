@@ -4,11 +4,8 @@ import { TAGLINE } from "../copy";
 import { coverVersion, siteByHandle } from "../db/sites.server";
 import { HANDLE_PATTERN } from "../handles";
 import { markdownToText } from "../markdown";
-import type { Cover } from "./cover";
+import { COVER_DESIGN, type Cover } from "./cover";
 import { renderCover, storedPicture } from "./render.server";
-
-/** Bumped when the cover's design changes, so every cached cover is drawn again. */
-const SITE_COVER_VERSION = "1";
 
 type Cached = (key: string, make: () => Promise<Response | null>) => Promise<Response | null>;
 
@@ -33,7 +30,7 @@ export async function coverResponse(url: URL, cached: Cached): Promise<Response 
   let version: string;
   let make: () => Promise<Cover>;
   if (name === "site") {
-    version = SITE_COVER_VERSION;
+    version = COVER_DESIGN;
     make = async () => ({ title: "neat.link", headline: TAGLINE, text: "", address: host, picture: null });
   } else {
     if (!HANDLE_PATTERN.test(name)) return null;

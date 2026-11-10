@@ -26,6 +26,8 @@ export function PageCard({ page, compact = false }: { page: PageCardData; compac
           alt=""
           width={144}
           height={144}
+          // The picture is what a visitor sees first.
+          fetchPriority="high"
           className={`${compact ? "h-24 w-24" : "h-36 w-36"} rounded-full border border-border object-cover`}
         />
       ) : (

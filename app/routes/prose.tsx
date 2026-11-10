@@ -1,8 +1,13 @@
 import { agentsMarkdown, privacyMarkdown, termsMarkdown } from "~/lib/copy";
 import { renderMarkdown } from "~/lib/markdown";
 import { pageMeta } from "~/lib/meta";
+import { COVER_DESIGN } from "~/lib/og/cover";
+import type { RouteHandle } from "~/root";
 
 import type { Route } from "./+types/prose";
+
+/** Plain HTML: nothing here needs scripts. */
+export const handle: RouteHandle = { static: true };
 
 const PAGES: Record<string, { title: string; description: string; markdown: (origin: string) => string }> = {
   "/agents": {
@@ -35,7 +40,7 @@ export function meta({ loaderData }: Route.MetaArgs) {
     title: loaderData.title,
     description: loaderData.description,
     url: `${loaderData.origin}${loaderData.path}`,
-    image: `${loaderData.origin}/og/site.png?v=1`,
+    image: `${loaderData.origin}/og/site.png?v=${COVER_DESIGN}`,
     markdown: `${loaderData.origin}${loaderData.path}.md`,
   });
 }

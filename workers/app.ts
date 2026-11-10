@@ -10,9 +10,11 @@ import { withSecurityHeaders } from "../app/lib/security/headers";
 import { isSameOriginRequest } from "../app/lib/security/request";
 import { loadViewer } from "../app/lib/viewer.server";
 import { markdownView, wantsMarkdown } from "../app/lib/views/markdown.server";
+import { isShareablePage, PAGE_CACHE_SECONDS, pageCacheKey, STATIC_PAGE_HEADER } from "../app/lib/views/page-cache";
 import { llmsTxt, robotsTxt, sitemapXml } from "../app/lib/views/seo.server";
 
-const requestHandler = createRequestHandler(() => import("virtual:react-router/server-build"), import.meta.env.MODE);
+const serverBuild = () => import("virtual:react-router/server-build");
+const requestHandler = createRequestHandler(serverBuild, import.meta.env.MODE);
 
 /**
  * Serves a response that is the same for everyone from the edge cache, or
@@ -28,6 +30,27 @@ async function cached(ctx: ExecutionContext, key: string, make: () => Promise<Re
   const response = await make();
   if (response && response.status === 200) ctx.waitUntil(cache.put(request, response.clone()));
   return response;
+}
+
+/**
+ * Answers a page from the edge cache, or renders it and keeps it there when
+ * it is static (see page-cache.ts). The kept copy carries only its type, and
+ * every answer gets this response's security headers and nonce; static pages
+ * have no scripts for a nonce to unlock.
+ */
+async function cachedPage(ctx: ExecutionContext, key: string, render: () => Promise<Response>): Promise<Response> {
+  const cache = await caches.open("pages");
+  const keyRequest = new Request(key);
+  const hit = await cache.match(keyRequest);
+  if (hit) return new Response(hit.body, { headers: { "Content-Type": hit.headers.get("Content-Type") ?? "text/html" } });
+  const response = await render();
+  if (!isShareablePage(response) || !response.body) return response;
+  const [kept, sent] = response.body.tee();
+  const type = response.headers.get("Content-Type") ?? "text/html";
+  ctx.waitUntil(
+    cache.put(keyRequest, new Response(kept, { headers: { "Content-Type": type, "Cache-Control": `public, max-age=${PAGE_CACHE_SECONDS}` } })),
+  );
+  return new Response(sent, response);
 }
 
 /**
@@ -145,12 +168,17 @@ async function serve(request: Request, ctx: ExecutionContext): Promise<Response>
     return secure(new Response(null, { status: 204, headers: { "Cache-Control": "no-store" } }));
   }
 
-  const context = new RouterContextProvider();
-  context.set(nonceContext, nonce);
-  let viewer: ReturnType<typeof loadViewer> | undefined;
-  context.set(viewerContext, () => (viewer ??= loadViewer(request)));
-  context.set(waitUntilContext, (work) => ctx.waitUntil(work));
-  const response = secure(await requestHandler(request, context));
+  const render = () => {
+    const context = new RouterContextProvider();
+    context.set(nonceContext, nonce);
+    let viewer: ReturnType<typeof loadViewer> | undefined;
+    context.set(viewerContext, () => (viewer ??= loadViewer(request)));
+    context.set(waitUntilContext, (work) => ctx.waitUntil(work));
+    return requestHandler(request, context);
+  };
+  const key = pageCacheKey(request, url, (await serverBuild()).assets.version);
+  const response = secure(key ? await cachedPage(ctx, key, render) : await render());
+  response.headers.delete(STATIC_PAGE_HEADER);
   // Pages answer in Markdown too, to requests that ask for it.
   if (response.headers.get("Content-Type")?.startsWith("text/html")) response.headers.append("Vary", "Accept");
   return response;

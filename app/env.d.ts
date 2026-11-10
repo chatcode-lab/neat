@@ -6,6 +6,12 @@ declare namespace Cloudflare {
   }
 }
 
+// Built files imported as their public address, such as a font to preload.
+declare module "*?url" {
+  const href: string;
+  export default href;
+}
+
 // Markdown files imported as text, such as the API guide.
 declare module "*.md?raw" {
   const content: string;

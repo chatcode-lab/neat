@@ -3,6 +3,7 @@ import { HANDLE_PATTERN, MIN_HANDLE_LENGTH, RESERVED_HANDLES } from "../handles"
 import { newId } from "../ids";
 import { MAX_HEADLINE_LENGTH, MAX_TITLE_LENGTH } from "../limits";
 import { MAX_BODY_LENGTH } from "../markdown";
+import { COVER_DESIGN } from "../og/cover";
 
 /** Sites one account may hold on the free plan (the legacy limit). */
 export const MAX_SITES = 2;
@@ -343,7 +344,7 @@ export async function suggestHandle(db: D1Database, candidates: Array<string | n
  * changes whenever it does and caches never serve an old one.
  */
 export function coverVersion(site: Pick<Site, "handle" | "page">): string {
-  const text = [site.handle, site.page.title, site.page.headline, site.page.body, site.page.imageKey ?? "", "1"].join("\u0000");
+  const text = [site.handle, site.page.title, site.page.headline, site.page.body, site.page.imageKey ?? "", COVER_DESIGN].join("\u0000");
   let hash = 0x811c9dc5;
   for (let index = 0; index < text.length; index += 1) {
     hash ^= text.charCodeAt(index);

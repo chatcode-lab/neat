@@ -4,6 +4,8 @@ import { isbot } from "isbot";
 import { renderToReadableStream } from "react-dom/server";
 
 import { nonceContext } from "./context";
+import { STATIC_PAGE_HEADER } from "./lib/views/page-cache";
+import type { RouteHandle } from "./root";
 
 export const streamTimeout = 5_000;
 
@@ -62,6 +64,15 @@ export default async function handleRequest(
   // https://react.dev/reference/react-dom/server/renderToPipeableStream#waiting-for-all-content-to-load-for-crawlers-and-static-generation
   if ((userAgent && isbot(userAgent)) || routerContext.isSpaMode) {
     await body.allReady;
+  }
+  // A static page (no scripts, the same for every visitor without an
+  // account) is sent whole, and marked so the Worker may keep it at the edge.
+  const isStatic = routerContext.staticHandlerContext.matches.some(
+    (match) => (match.route.handle as RouteHandle | undefined)?.static,
+  );
+  if (isStatic) {
+    await body.allReady;
+    responseHeaders.set(STATIC_PAGE_HEADER, "1");
   }
 
   responseHeaders.set("Content-Type", "text/html");

@@ -12,7 +12,7 @@ import type { RouteHandle } from "~/root";
 
 import type { Route } from "./+types/page";
 
-export const handle: RouteHandle = { bare: true };
+export const handle: RouteHandle = { bare: true, static: true };
 
 /**
  * A site's main page at /<handle>. Drafts are shown to their owner only,

@@ -5,9 +5,14 @@ import { PageCard } from "~/components/page-card";
 import { TAGLINE } from "~/lib/copy";
 import { renderMarkdown } from "~/lib/markdown";
 import { pageMeta } from "~/lib/meta";
+import { COVER_DESIGN } from "~/lib/og/cover";
+import type { RouteHandle } from "~/root";
 import { viewerOf } from "~/lib/viewer.server";
 
 import type { Route } from "./+types/home";
+
+/** Plain HTML: nothing here needs scripts. */
+export const handle: RouteHandle = { static: true };
 
 export async function loader({ url, context }: Route.LoaderArgs) {
   const origin = url.origin;
@@ -25,7 +30,7 @@ export function meta({ loaderData }: Route.MetaArgs) {
     title: "neat.link — one neat page for all your links",
     description: `${TAGLINE} A picture, your name, a few lines and a button for every place people can find you. Agents can write it for you.`,
     url: `${loaderData.origin}/`,
-    image: `${loaderData.origin}/og/site.png?v=1`,
+    image: `${loaderData.origin}/og/site.png?v=${COVER_DESIGN}`,
     markdown: `${loaderData.origin}/index.md`,
   });
 }

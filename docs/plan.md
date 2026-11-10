@@ -128,10 +128,34 @@ Dropped on purpose:
 `/api`, `/oauth`, `/mcp`, `/auth`, `/signin`. Every page has OpenGraph and
 Twitter tags with a generated cover (1200×630).
 
+## Speed and cost
+
+Most traffic is visitors reading pages, so that path is kept cheap:
+
+- **Static pages send no scripts.** A site's page, the home page and
+  `/agents`, `/terms`, `/privacy` are plain HTML (route `handle.static`):
+  about 3 KB, one stylesheet and one preloaded font, never hydrated. The
+  header's theme switch falls back to a form post that reloads the page.
+- **Edge cache for visitors without an account.** Static pages are kept in
+  the Cache API for 60 seconds per data centre, keyed by path, theme and
+  build, so a hit needs no rendering and no D1 read. A request with a
+  session cookie always renders, so an owner sees their edit at once; others
+  see it within a minute. The Cache API is per data centre and cannot be
+  purged globally without an API token, which a minute's delay does not
+  justify. It does not work on workers.dev, so staging always renders.
+- **Built assets are immutable** (`public/_headers`: a year for
+  `/assets/*`, a day for icons) and served by Cloudflare without running
+  the Worker. Pictures are stored resized with a year's cache and, in
+  production, served from the bucket's own domain, also without the Worker.
+- Covers, Markdown views and the sitemap were already edge-cached.
+- Logs keep every request; production traces sample one in ten.
+
 ## Design
 
-Minimal and functional. One column, system font stack, semantic colour
-tokens with light and dark schemes. Public pages follow the visitor's system
+Minimal and functional. One column, Inter (Rubik on page buttons, as on the
+legacy pages), served from the site itself, semantic colour
+tokens with light and dark schemes. Monochrome for now: the accent is the
+text colour, and only errors and confirmations have a hue. Public pages follow the visitor's system
 scheme. The editor has a System/Light/Dark switch stored in a cookie and
 applied by CSS before scripts run (aionly's approach, no flash). Site themes
 and backgrounds come later as a paid feature; `sites.theme` exists for them.
