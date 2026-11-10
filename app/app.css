@@ -231,12 +231,15 @@
 
   /*
    * A page's buttons, in the colours of the services they lead to, as on the
-   * legacy pages (their values where they had one, the brand's otherwise).
-   * Any other web address gets the legacy blue-to-teal link. Every kind in
-   * app/lib/buttons.ts has a rule; a unit test checks it.
+   * legacy pages (their values where they had one, the brand's otherwise),
+   * darkened where a white label needed it to reach 4.5:1; Amazon and
+   * Snapchat keep their bright colours with dark labels. Any other web
+   * address gets the legacy blue-to-teal link. Every kind in
+   * app/lib/buttons.ts has a rule and every colour reads with its label; a
+   * unit test checks both.
    */
   .page-button {
-    background: linear-gradient(90deg, #3a7db4, #008181 50%, #006464);
+    background: linear-gradient(90deg, #3879af, #008181 50%, #006464);
     color: #ffffff;
     box-shadow: inset 0 0 0 1px var(--button-edge);
   }
@@ -253,19 +256,19 @@
     background: #1769ff;
   }
   .page-button-bluesky {
-    background: linear-gradient(135deg, #5a72fa, #0084ff);
+    background: linear-gradient(135deg, #4b65fa, #0074df);
   }
   .page-button-discord {
-    background: #7289da;
+    background: #526fd2;
   }
   .page-button-dribbble {
-    background: #ea4c89;
+    background: #e11a67;
   }
   .page-button-email {
     background: linear-gradient(90deg, #7b6b83, #7e5fb3 50%, #6a5c77);
   }
   .page-button-facebook {
-    background: #1877f2;
+    background: #0d6fee;
   }
   .page-button-github {
     background: #333333;
@@ -274,70 +277,70 @@
     background: #554488;
   }
   .page-button-instagram {
-    background: linear-gradient(45deg, #405de6, #5851db, #833ab4, #c13584, #e1306c, #fd1d1d);
+    background: linear-gradient(45deg, #405de6, #5851db, #833ab4, #c13584, #df2363, #eb0202);
   }
   .page-button-linkedin {
     background: #0077b5;
   }
   .page-button-mastodon {
-    background: #6364ff;
+    background: #5e5fff;
   }
   .page-button-medium {
-    background: #00ab6c;
+    background: #008655;
   }
   .page-button-patreon {
-    background: #ff434d;
+    background: #eb000d;
   }
   .page-button-phone {
-    background: linear-gradient(120deg, #15803d, #22c55e);
+    background: linear-gradient(120deg, #15803d, #178640);
   }
   .page-button-pinterest {
     background: #e60023;
   }
   .page-button-reddit {
-    background: #ff4500;
+    background: #d83b00;
   }
   .page-button-signal {
-    background: #3a76f0;
+    background: #2e6def;
   }
   .page-button-snapchat {
     background: #fffc00; color: #111827;
   }
   .page-button-soundcloud {
-    background: linear-gradient(120deg, #ff8800, #ff3300);
+    background: linear-gradient(120deg, #b25f00, #e02d00);
   }
   .page-button-spotify {
-    background: #1db954;
+    background: #15873d;
   }
   .page-button-substack {
-    background: #ff6719;
+    background: #d04600;
   }
   .page-button-telegram {
-    background: #25a3e1;
+    background: #187cae;
   }
   .page-button-threads {
     background: #000000;
   }
   .page-button-tiktok {
-    background: #fe2d55;
+    background: #ea012e;
   }
   .page-button-twitch {
     background: #9146ff;
   }
   .page-button-viber {
-    background: #7360f2;
+    background: #715df2;
   }
   .page-button-vk {
-    background: #0077ff;
+    background: #006fef;
   }
   .page-button-whatsapp {
-    background: linear-gradient(120deg, #12990b, #45d82c);
+    background: linear-gradient(120deg, #10880a, #298619);
   }
   .page-button-x {
     background: #000000;
   }
   .page-button-youtube {
-    background: #ff0000;
+    background: #eb0000;
   }
 
   /* Form fields in the editor. */

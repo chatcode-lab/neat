@@ -45,6 +45,10 @@ describe("request body cap", () => {
     expect(bodyLimit("/app/sites/ada")).toBe(UPLOAD_BODY_LIMIT);
     expect(bodyLimit("/app/sites/ada.data")).toBe(UPLOAD_BODY_LIMIT);
     expect(bodyLimit("/api/v1/sites/ada/picture")).toBe(UPLOAD_BODY_LIMIT);
+    // The same handlers answer with trailing or repeated slashes.
+    expect(bodyLimit("/api/v1/sites/ada/picture/")).toBe(UPLOAD_BODY_LIMIT);
+    expect(bodyLimit("/api/v1//sites/ada//picture")).toBe(UPLOAD_BODY_LIMIT);
+    expect(bodyLimit("/app/sites/ada/")).toBe(UPLOAD_BODY_LIMIT);
     expect(bodyLimit("/signin")).toBe(BODY_LIMIT);
     expect(bodyLimit("/app/settings")).toBe(BODY_LIMIT);
     expect(bodyLimit("/mcp")).toBe(BODY_LIMIT);

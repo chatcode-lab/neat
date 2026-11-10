@@ -47,7 +47,8 @@ export async function loader({ request, url, params, context }: Route.LoaderArgs
   };
 }
 
-type ActionResult = { ok: true; message: string } | { error: string };
+/** `saved` marks a content save, after which the editor shows the page as stored. */
+type ActionResult = { ok: true; message: string; saved?: true } | { error: string };
 
 export async function action({ request, url, params, context }: Route.ActionArgs): Promise<ActionResult | Response> {
   const account = await requireAccount(request, context);
@@ -78,7 +79,7 @@ export async function action({ request, url, params, context }: Route.ActionArgs
           { title: form.get("title"), headline: form.get("headline"), body: form.get("body"), buttons },
           now,
         );
-        return { ok: true, message: "Saved." };
+        return { ok: true, message: "Saved.", saved: true };
       }
       case "publish":
       case "unpublish":
@@ -136,18 +137,21 @@ export default function EditSite({ loaderData }: Route.ComponentProps) {
   const [body, setBody] = useState(loaderData.body);
   const [rows, setRows] = useState<Row[]>(() => toRows(loaderData.buttons));
 
-  // The page as saved. Edits give way to it only when it changes: another
-  // site, a save (its normalized links included) or an edit made elsewhere.
-  // A refused save, a new picture or a theme change reload the same page and
-  // keep what is being typed.
+  // The page as saved. Edits give way to it when it changes (another site,
+  // an edit made elsewhere) and after every successful save, which shows it
+  // as stored, trimmed and with normalized links, even when that equals what
+  // was stored before. A refused save, a new picture or a theme change reload
+  // the same page and keep what is being typed.
   const saved = JSON.stringify([loaderData.handle, loaderData.title, loaderData.headline, loaderData.body, loaderData.buttons]);
-  const [editing, setEditing] = useState(saved);
-  if (saved !== editing) {
-    setEditing(saved);
-    setTitle(loaderData.title);
-    setHeadline(loaderData.headline);
-    setBody(loaderData.body);
-    setRows(toRows(loaderData.buttons));
+  const [shown, setShown] = useState({ saved, result });
+  if (saved !== shown.saved || result !== shown.result) {
+    setShown({ saved, result });
+    if (saved !== shown.saved || (result && "saved" in result)) {
+      setTitle(loaderData.title);
+      setHeadline(loaderData.headline);
+      setBody(loaderData.body);
+      setRows(toRows(loaderData.buttons));
+    }
   }
 
   const changed =

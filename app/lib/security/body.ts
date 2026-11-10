@@ -107,9 +107,14 @@ const UPLOAD_PATHS = [/^\/app\/sites\/[^/]+(?:\.data)?$/, /^\/api\/v1\/sites\/[^
 /** The name of the error a reader of a body over its limit gets. */
 export const BODY_OVER_LIMIT = "BodyOverLimit";
 
-/** How much of a request body this path may read. */
+/**
+ * How much of a request body this path may read. The path is compared
+ * without repeated or trailing slashes, which the router and the API also
+ * accept, so every address of an upload gets the same allowance.
+ */
 export function bodyLimit(pathname: string): number {
-  return UPLOAD_PATHS.some((pattern) => pattern.test(pathname)) ? UPLOAD_BODY_LIMIT : BODY_LIMIT;
+  const path = pathname.replace(/\/{2,}/g, "/").replace(/(.)\/+$/, "$1");
+  return UPLOAD_PATHS.some((pattern) => pattern.test(path)) ? UPLOAD_BODY_LIMIT : BODY_LIMIT;
 }
 
 /**
