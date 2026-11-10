@@ -1,0 +1,16 @@
+# Local secrets for `npm run dev` and `vite preview`. Copy to .dev.vars, which
+# Git ignores, and fill in. The deployed Worker gets its own with
+# `npm run secret:production -- <NAME>`.
+
+# Any long random string, such as the output of `openssl rand -base64 32`.
+BETTER_AUTH_SECRET=replace-with-a-long-random-string
+
+# A Google OAuth client whose redirect URIs include
+# http://localhost:5173/api/auth/callback/google.
+GOOGLE_CLIENT_ID=replace-with-your-client-id
+GOOGLE_CLIENT_SECRET=replace-with-your-client-secret
+
+# A test bot from @BotFather (not the production one, which would steal its
+# webhook), and any random string for the webhook's secret header.
+TELEGRAM_BOT_TOKEN=123456:replace-with-a-test-bot-token
+TELEGRAM_WEBHOOK_SECRET=replace-with-a-random-string

@@ -1,0 +1,127 @@
+/**
+ * Wrangler configuration. The top level is local development only and is
+ * deliberately inert if deployed by mistake: no public address, and
+ * ENVIRONMENT fails safe to "production" so nothing dev-only is served.
+ * Deploys always name their environment (`npm run deploy:production`); the
+ * environment is chosen at build time with CLOUDFLARE_ENV.
+ */
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "neat-link-local",
+	"main": "./workers/app.ts",
+	"compatibility_date": "2026-10-06",
+	"compatibility_flags": ["nodejs_compat"],
+	"observability": {
+		"enabled": true,
+		"traces": { "enabled": true, "head_sampling_rate": 1 }
+	},
+	"upload_source_maps": true,
+	"workers_dev": false,
+	"preview_urls": false,
+	"vars": {
+		"ENVIRONMENT": "production",
+		// Where stored media is served from: the MEDIA bucket on its own public
+		// domain, with no Worker in the way. Empty means through the Worker at
+		// /media/<key>, as in local development and tests.
+		"MEDIA_ORIGIN": "",
+		// The bot users talk to and that signs Telegram logins. Its token is a secret.
+		"TELEGRAM_BOT_USERNAME": "neatlink_bot"
+	},
+	// Set with `npm run secret:production -- <NAME>`, and in .dev.vars locally
+	// (see .dev.vars.example). A deploy fails while any is missing.
+	"secrets": {
+		"required": [
+			"BETTER_AUTH_SECRET",
+			"GOOGLE_CLIENT_ID",
+			"GOOGLE_CLIENT_SECRET",
+			"TELEGRAM_BOT_TOKEN",
+			"TELEGRAM_WEBHOOK_SECRET"
+		]
+	},
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_name": "neat-link-local",
+			"database_id": "local",
+			"migrations_dir": "migrations"
+		}
+	],
+	// Avatars (and later uploads). Simulated locally.
+	"r2_buckets": [
+		{
+			"binding": "MEDIA",
+			"bucket_name": "neat-link-local-media"
+		}
+	],
+	// Cloudflare Images squares and re-encodes avatars before they are kept.
+	"images": {
+		"binding": "IMAGING"
+	},
+	// Burst limits per minute, per account and per address. Counters are shared
+	// by namespace across the whole Cloudflare account, so each environment has
+	// its own numbers: 1000s here, 3000s in production.
+	"ratelimits": [
+		{ "name": "RL_WRITE_USER", "namespace_id": "1101", "simple": { "limit": 30, "period": 60 } },
+		{ "name": "RL_WRITE_IP", "namespace_id": "1102", "simple": { "limit": 60, "period": 60 } },
+		{ "name": "RL_SIGNIN_IP", "namespace_id": "1103", "simple": { "limit": 10, "period": 60 } },
+		{ "name": "RL_READ_USER", "namespace_id": "1104", "simple": { "limit": 120, "period": 60 } },
+		{ "name": "RL_READ_IP", "namespace_id": "1105", "simple": { "limit": 240, "period": 60 } },
+		{ "name": "RL_UPLOAD_USER", "namespace_id": "1106", "simple": { "limit": 10, "period": 60 } },
+		{ "name": "RL_UPLOAD_IP", "namespace_id": "1107", "simple": { "limit": 30, "period": 60 } }
+	],
+	// Hourly: expired sign-in links, OAuth codes and abandoned media.
+	"triggers": {
+		"crons": ["23 * * * *"]
+	},
+	"env": {
+		"production": {
+			"name": "neat-link",
+			"workers_dev": false,
+			"preview_urls": false,
+			"routes": [{ "pattern": "neat.link/*", "zone_name": "neat.link" }],
+			"vars": {
+				"ENVIRONMENT": "production",
+				"MEDIA_ORIGIN": "https://media.neat.link",
+				"TELEGRAM_BOT_USERNAME": "neatlink_bot"
+			},
+			"secrets": {
+				"required": [
+					"BETTER_AUTH_SECRET",
+					"GOOGLE_CLIENT_ID",
+					"GOOGLE_CLIENT_SECRET",
+					"TELEGRAM_BOT_TOKEN",
+					"TELEGRAM_WEBHOOK_SECRET"
+				]
+			},
+			// Create with `wrangler d1 create neat-link` and paste its id here.
+			"d1_databases": [
+				{
+					"binding": "DB",
+					"database_name": "neat-link",
+					"database_id": "00000000-0000-0000-0000-000000000000",
+					"migrations_dir": "migrations"
+				}
+			],
+			// Create with `wrangler r2 bucket create neat-link-media` and attach
+			// media.neat.link as its public custom domain.
+			"r2_buckets": [
+				{
+					"binding": "MEDIA",
+					"bucket_name": "neat-link-media"
+				}
+			],
+			"images": {
+				"binding": "IMAGING"
+			},
+			"ratelimits": [
+				{ "name": "RL_WRITE_USER", "namespace_id": "3101", "simple": { "limit": 30, "period": 60 } },
+				{ "name": "RL_WRITE_IP", "namespace_id": "3102", "simple": { "limit": 60, "period": 60 } },
+				{ "name": "RL_SIGNIN_IP", "namespace_id": "3103", "simple": { "limit": 10, "period": 60 } },
+				{ "name": "RL_READ_USER", "namespace_id": "3104", "simple": { "limit": 120, "period": 60 } },
+				{ "name": "RL_READ_IP", "namespace_id": "3105", "simple": { "limit": 240, "period": 60 } },
+				{ "name": "RL_UPLOAD_USER", "namespace_id": "3106", "simple": { "limit": 10, "period": 60 } },
+				{ "name": "RL_UPLOAD_IP", "namespace_id": "3107", "simple": { "limit": 30, "period": 60 } }
+			]
+		}
+	}
+}
