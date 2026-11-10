@@ -40,11 +40,13 @@ export async function loader({ url, context }: Route.LoaderArgs) {
 }
 
 export async function action({ request, url }: Route.ActionArgs) {
-  const form = await request.formData();
-  const next = safeReturnPath(String(form.get("next") ?? "/app"), url.origin);
+  // The limit comes before the form is read, so a client over it costs nothing more.
   if (!(await withinLimits(request, "signin", null))) {
+    const next = safeReturnPath(url.searchParams.get("next") ?? "/app", url.origin);
     throw redirect(`/signin?${new URLSearchParams({ next, error: "rate_limited" })}`);
   }
+  const form = await request.formData();
+  const next = safeReturnPath(String(form.get("next") ?? "/app"), url.origin);
   const response = await googleSignIn(request, next);
   if (!response) throw redirect(`/signin?${new URLSearchParams({ next, error: "unknown" })}`);
   return response;

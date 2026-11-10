@@ -176,7 +176,10 @@ and backgrounds come later as a paid feature; `sites.theme` exists for them.
 CSP with a per-response nonce; frames denied except the editor, which
 Telegram Web may frame as a Mini App. Every non-GET must carry a same-origin
 `Origin` header, except the bearer-token API, MCP, OAuth endpoints and the
-Telegram webhook (checked by its secret header). Bodies are read with caps.
+Telegram webhook (checked by its secret header). Bodies are read with caps:
+each endpoint has its own, and the Worker cuts every request body off at
+512 KiB (8 MB and a margin where pictures are uploaded), so no action or
+library ever buffers more, whatever the request declares.
 Burst limits per account and per address with Workers rate-limit bindings.
 Return paths after sign-in are reduced to same-origin paths.
 

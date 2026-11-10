@@ -1,5 +1,5 @@
 import { ArrowUp, ExternalLink, ImageUp, Plus, Trash2, X } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { Form, redirect, useActionData, useNavigation, useSubmit } from "react-router";
 
 import { PageCard } from "~/components/page-card";
@@ -136,13 +136,19 @@ export default function EditSite({ loaderData }: Route.ComponentProps) {
   const [body, setBody] = useState(loaderData.body);
   const [rows, setRows] = useState<Row[]>(() => toRows(loaderData.buttons));
 
-  // After a save the server's version, normalized links included, is the one to edit.
-  useEffect(() => {
+  // The page as saved. Edits give way to it only when it changes: another
+  // site, a save (its normalized links included) or an edit made elsewhere.
+  // A refused save, a new picture or a theme change reload the same page and
+  // keep what is being typed.
+  const saved = JSON.stringify([loaderData.handle, loaderData.title, loaderData.headline, loaderData.body, loaderData.buttons]);
+  const [editing, setEditing] = useState(saved);
+  if (saved !== editing) {
+    setEditing(saved);
     setTitle(loaderData.title);
     setHeadline(loaderData.headline);
     setBody(loaderData.body);
     setRows(toRows(loaderData.buttons));
-  }, [loaderData]);
+  }
 
   const changed =
     title !== loaderData.title ||

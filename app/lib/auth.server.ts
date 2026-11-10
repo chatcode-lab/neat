@@ -4,6 +4,7 @@ import { APIError } from "better-auth/api";
 
 import { adoptGoogleEmail } from "./db/accounts.server";
 import { newId } from "./ids";
+import { newUserDestination } from "./security/request";
 import { SESSION_SECONDS } from "./sessions.server";
 
 const SESSION_REFRESH_SECONDS = 24 * 3600;
@@ -130,7 +131,7 @@ export async function googleSignIn(request: Request, next: string): Promise<Resp
     body: {
       provider: "google",
       callbackURL: next,
-      newUserCallbackURL: "/app?welcome=1",
+      newUserCallbackURL: newUserDestination(next),
       errorCallbackURL: `/signin?${new URLSearchParams({ next })}`,
       disableRedirect: true,
     },

@@ -4,17 +4,24 @@ import { redirect, type RouterContextProvider } from "react-router";
 import { viewerContext } from "../context";
 import { authFor } from "./auth.server";
 import { type Account, accountRecord } from "./db/accounts.server";
-import { SESSION_COOKIE_PATTERN } from "./session-cookie";
+import { renewalCookie, SESSION_COOKIE_PATTERN } from "./session-cookie";
 
 // Better Auth's session cookie, with or without the `__Secure-` prefix.
 
 /**
  * The signed-in account from the session cookie, read from D1 every time.
- * Requests without the cookie skip the database.
+ * Requests without the cookie skip the database. Reading a session may renew
+ * it (once a day) or clear a stale cookie; those cookies go to `setCookie`,
+ * for the Worker to send with the response.
  */
-export async function loadViewer(request: Request): Promise<Account | null> {
+export async function loadViewer(request: Request, setCookie: (cookie: string) => void = () => {}): Promise<Account | null> {
   if (!SESSION_COOKIE_PATTERN.test(request.headers.get("Cookie") ?? "")) return null;
-  const session = await authFor(request).api.getSession({ headers: request.headers, query: { disableCookieCache: true } });
+  const { headers, response: session } = await authFor(request).api.getSession({
+    headers: request.headers,
+    query: { disableCookieCache: true },
+    returnHeaders: true,
+  });
+  for (const cookie of headers.getSetCookie()) setCookie(renewalCookie(cookie));
   if (!session) return null;
   return accountRecord(env.DB, session.user.id);
 }

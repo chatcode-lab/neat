@@ -5,9 +5,11 @@ import { nonceContext, viewerContext, waitUntilContext } from "../app/context";
 import { sweepTelegramTokens } from "../app/lib/db/telegram-tokens.server";
 import { sweepOAuth } from "../app/lib/oauth/clients.server";
 import { authorizationServerMetadata, protectedResourceMetadata } from "../app/lib/oauth/metadata";
+import { bodyLimit, capRequestBody, tooLarge } from "../app/lib/security/body";
 import { createNonce } from "../app/lib/security/csp";
 import { withSecurityHeaders } from "../app/lib/security/headers";
 import { isSameOriginRequest } from "../app/lib/security/request";
+import { SESSION_COOKIE_PATTERN } from "../app/lib/session-cookie";
 import { loadViewer } from "../app/lib/viewer.server";
 import { markdownView, wantsMarkdown } from "../app/lib/views/markdown.server";
 import { isShareablePage, PAGE_CACHE_SECONDS, pageCacheKey, STATIC_PAGE_HEADER } from "../app/lib/views/page-cache";
@@ -124,6 +126,9 @@ async function serve(request: Request, ctx: ExecutionContext): Promise<Response>
   const crossOrigin = isOpenPath(url.pathname) || url.pathname === "/telegram/webhook";
   if (!crossOrigin && !isSameOriginRequest(request)) return secure(new Response("Forbidden", { status: 403 }));
   if (request.method === "OPTIONS" && isOpenPath(url.pathname)) return secure(new Response(null, { status: 204 }));
+  // No body is read past its limit, whoever reads it; one that passes it is answered with a 413.
+  const capped = capRequestBody(request, bodyLimit(url.pathname));
+  request = capped.request;
 
   if (request.method === "GET" || request.method === "HEAD") {
     const document = discovery(url.pathname, url.origin);
@@ -168,17 +173,25 @@ async function serve(request: Request, ctx: ExecutionContext): Promise<Response>
     return secure(new Response(null, { status: 204, headers: { "Cache-Control": "no-store" } }));
   }
 
+  // Cookies from reading the session: a renewal, or clearing a stale one.
+  const sessionCookies: string[] = [];
   const render = () => {
     const context = new RouterContextProvider();
     context.set(nonceContext, nonce);
     let viewer: ReturnType<typeof loadViewer> | undefined;
-    context.set(viewerContext, () => (viewer ??= loadViewer(request)));
+    context.set(viewerContext, () => (viewer ??= loadViewer(request, (cookie) => sessionCookies.push(cookie))));
     context.set(waitUntilContext, (work) => ctx.waitUntil(work));
     return requestHandler(request, context);
   };
   const key = pageCacheKey(request, url, (await serverBuild()).assets.version);
-  const response = secure(key ? await cachedPage(ctx, key, render) : await render());
+  const rendered = key ? await cachedPage(ctx, key, render) : await render();
+  if (capped.overLimit()) return secure(tooLarge(isOpenPath(url.pathname)));
+  const response = secure(rendered);
   response.headers.delete(STATIC_PAGE_HEADER);
+  // Unless the answer sets the session itself, as signing in or out does.
+  if (!response.headers.getSetCookie().some((cookie) => SESSION_COOKIE_PATTERN.test(cookie))) {
+    for (const cookie of sessionCookies) response.headers.append("Set-Cookie", cookie);
+  }
   // Pages answer in Markdown too, to requests that ask for it.
   if (response.headers.get("Content-Type")?.startsWith("text/html")) response.headers.append("Vary", "Accept");
   return response;

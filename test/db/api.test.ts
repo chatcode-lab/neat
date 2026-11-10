@@ -12,6 +12,8 @@ import { handleApi } from "../../app/lib/api/v1.server";
 import { accountRecord, linkTelegram, unlinkTelegram, userForTelegram } from "../../app/lib/db/accounts.server";
 import { claimTelegramToken, issueTelegramToken, peekTelegramToken } from "../../app/lib/db/telegram-tokens.server";
 import { createToken, revokeToken, userForToken } from "../../app/lib/db/tokens.server";
+import { startSession } from "../../app/lib/sessions.server";
+import { loadViewer } from "../../app/lib/viewer.server";
 import { pageMarkdown } from "../../app/lib/views/markdown.server";
 
 const ORIGIN = "https://neat.link";
@@ -151,6 +153,17 @@ describe("Telegram", () => {
     expect((await accountRecord(env.DB, "ada"))?.telegram).toEqual({ id: "777", username: "ada_tg", name: "Ada" });
   });
 
+  it("links one Telegram identity per account, even when two confirmations race", async () => {
+    await user("ada", [["google", "g1"]]);
+    const results = await Promise.all([
+      linkTelegram(env.DB, "ada", { ...telegram, id: 801 }, NOW),
+      linkTelegram(env.DB, "ada", { ...telegram, id: 802 }, NOW),
+    ]);
+    expect(results.sort()).toEqual(["has_other", "linked"]);
+    const rows = await env.DB.prepare(`SELECT count(*) AS n FROM "account" WHERE "userId" = 'ada' AND "providerId" = 'telegram'`).first<{ n: number }>();
+    expect(rows?.n).toBe(1);
+  });
+
   it("keeps Telegram on an account that has nothing else to sign in with", async () => {
     await user("legacy", [["telegram", "555"]]);
     expect(await unlinkTelegram(env.DB, "legacy")).toBe(false);
@@ -167,5 +180,37 @@ describe("Telegram", () => {
     expect(await claimTelegramToken(env.DB, token, "login", NOW)).toBeNull();
     const late = await issueTelegramToken(env.DB, { userId: "ada", purpose: "login", now: NOW });
     expect(await claimTelegramToken(env.DB, late, "login", NOW + 3600)).toBeNull();
+  });
+});
+
+describe("sessions", () => {
+  // Sessions are read against the real clock, so these start two days ago.
+  const twoDaysAgo = () => Math.floor(Date.now() / 1000) - 2 * 24 * 3600;
+
+  async function signedIn(embedded: boolean) {
+    await user("ada", [["google", "g1"]]);
+    const request = new Request(ORIGIN, { headers: { "CF-Connecting-IP": "203.0.113.9" } });
+    const cookie = await startSession(env.DB, { userId: "ada", request, secret: env.BETTER_AUTH_SECRET, now: twoDaysAgo(), embedded });
+    return new Request(`${ORIGIN}/app`, { headers: { Cookie: cookie.split(";")[0]! } });
+  }
+
+  const expiry = async () =>
+    Date.parse((await env.DB.prepare(`SELECT "expiresAt" FROM "session" WHERE "userId" = 'ada'`).first<{ expiresAt: string }>())!.expiresAt);
+
+  it("renew once a day, and the browser is sent the renewed cookie", async () => {
+    const request = await signedIn(false);
+    const before = await expiry();
+    const cookies: string[] = [];
+    expect((await loadViewer(request, (cookie) => cookies.push(cookie)))?.id).toBe("ada");
+    expect(await expiry()).toBeGreaterThan(before);
+    expect(cookies).toHaveLength(1);
+    expect(cookies[0]).toMatch(/^__Secure-better-auth\.session_token=.*Max-Age=2592000.*SameSite=Lax/);
+  });
+
+  it("renew a Mini App session's cookie for Telegram's frame", async () => {
+    const cookies: string[] = [];
+    await loadViewer(await signedIn(true), (cookie) => cookies.push(cookie));
+    expect(cookies).toHaveLength(1);
+    expect(cookies[0]).toMatch(/; SameSite=None; Partitioned$/);
   });
 });

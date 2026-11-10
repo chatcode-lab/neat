@@ -95,3 +95,57 @@ export async function readBytesCapped(request: Request, maxBytes: number): Promi
   }
   return bytes;
 }
+
+/** The most any request body may be, above every endpoint's own limit, so their own answers come first. */
+export const BODY_LIMIT = 512 * 1024;
+
+/** Picture uploads: the editor's form and the API's picture endpoint, 8 MB and a margin. */
+export const UPLOAD_BODY_LIMIT = 8 * 1024 * 1024 + 128 * 1024;
+
+const UPLOAD_PATHS = [/^\/app\/sites\/[^/]+(?:\.data)?$/, /^\/api\/v1\/sites\/[^/]+\/picture$/];
+
+/** The name of the error a reader of a body over its limit gets. */
+export const BODY_OVER_LIMIT = "BodyOverLimit";
+
+/** How much of a request body this path may read. */
+export function bodyLimit(pathname: string): number {
+  return UPLOAD_PATHS.some((pattern) => pattern.test(pathname)) ? UPLOAD_BODY_LIMIT : BODY_LIMIT;
+}
+
+/**
+ * The request with its body cut off at `maxBytes`: reading past the limit
+ * fails, so whatever parses the body (an action's formData(), better-auth)
+ * never buffers more, declared length or not. Nothing is read until someone
+ * reads it, so a request turned away first costs nothing. `overLimit` says
+ * afterwards whether the body was cut off, so the answer can be a 413
+ * whatever the reader made of the failure.
+ */
+export function capRequestBody(request: Request, maxBytes: number): { request: Request; overLimit: () => boolean } {
+  if (!request.body) return { request, overLimit: () => false };
+  let size = 0;
+  let over = false;
+  const body = request.body.pipeThrough(
+    new TransformStream<Uint8Array, Uint8Array>({
+      transform(chunk, controller) {
+        size += chunk.byteLength;
+        if (size > maxBytes) {
+          over = true;
+          const error = new RangeError("The request body is over its limit.");
+          error.name = BODY_OVER_LIMIT;
+          controller.error(error);
+        } else controller.enqueue(chunk);
+      },
+    }),
+  );
+  // Node's Request needs duplex for a streamed body; Workers ignore it.
+  return { request: new Request(request, { body, duplex: "half" } as RequestInit), overLimit: () => over };
+}
+
+/** The answer to a body over its limit: JSON for the API and MCP, text elsewhere. */
+export function tooLarge(json: boolean): Response {
+  const message = "That is more than this address accepts.";
+  const headers = { "Cache-Control": "no-store" };
+  return json
+    ? Response.json({ error: "too_large", message }, { status: 413, headers })
+    : new Response(`${message}\n`, { status: 413, headers: { ...headers, "Content-Type": "text/plain; charset=utf-8" } });
+}

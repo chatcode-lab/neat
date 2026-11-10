@@ -83,24 +83,28 @@ export async function linkTelegram(db: D1Database, userId: string, user: Telegra
   const owner = await userForTelegram(db, user.id);
   if (owner === userId) return "already_linked";
   if (owner) return "taken";
-  const existing = await db
-    .prepare(`SELECT 1 FROM "account" WHERE "userId" = ?1 AND "providerId" = 'telegram'`)
-    .bind(userId)
-    .first();
-  if (existing) return "has_other";
   const stamp = new Date(now * 1000).toISOString();
+  // The check that the account has no Telegram yet is part of the insert,
+  // and a unique index backs it, so two confirmations at once link one.
+  let linked: boolean;
   try {
-    await db
+    const result = await db
       .prepare(
         `INSERT INTO "account" ("id", "accountId", "providerId", "userId", "createdAt", "updatedAt")
-         VALUES (?1, ?2, 'telegram', ?3, ?4, ?4)`,
+         SELECT ?1, ?2, 'telegram', ?3, ?4, ?4
+         WHERE NOT EXISTS (SELECT 1 FROM "account" WHERE "userId" = ?3 AND "providerId" = 'telegram')`,
       )
       .bind(newId(), String(user.id), userId, stamp)
       .run();
+    linked = result.meta.changes > 0;
   } catch {
-    // Linked elsewhere at the same moment.
-    return "taken";
+    // A unique index: this Telegram linked elsewhere, or another one here, at the same moment.
+    const holder = await userForTelegram(db, user.id);
+    if (holder === userId) return "already_linked";
+    if (holder) return "taken";
+    return "has_other";
   }
+  if (!linked) return "has_other";
   await rememberTelegramUser(db, user, now);
   return "linked";
 }

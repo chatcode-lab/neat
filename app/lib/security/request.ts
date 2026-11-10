@@ -89,3 +89,12 @@ function plainReturnPath(value: string | null | undefined, siteOrigin: string): 
   if (path.startsWith("//") || new URL(path, siteOrigin).origin !== siteOrigin) return "/";
   return path;
 }
+
+/**
+ * Where a new account goes after signing up with Google: the editor's
+ * welcome, unless the sign-in was on the way somewhere else, such as
+ * approving an app that asked to connect (OAuth), where it goes on.
+ */
+export function newUserDestination(next: string): string {
+  return /^\/app(?:[/?#]|$)/.test(next) ? "/app?welcome=1" : next;
+}

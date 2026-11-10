@@ -4,6 +4,7 @@ import { isbot } from "isbot";
 import { renderToReadableStream } from "react-dom/server";
 
 import { nonceContext } from "./context";
+import { BODY_OVER_LIMIT } from "./lib/security/body";
 import { STATIC_PAGE_HEADER } from "./lib/views/page-cache";
 import type { RouteHandle } from "./root";
 
@@ -16,6 +17,8 @@ export const streamTimeout = 5_000;
 export const handleError: HandleErrorFunction = (error, { request }) => {
   if (request.signal.aborted) return;
   if (isRouteErrorResponse(error) && error.status < 500) return;
+  // A body over its limit is answered with a 413 by the Worker; nothing broke.
+  if (error instanceof Error && error.name === BODY_OVER_LIMIT) return;
   // React Router's own error responses carry what caused them.
   console.error((isRouteErrorResponse(error) && (error as { error?: unknown }).error) || error);
 };

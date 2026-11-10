@@ -1,14 +1,9 @@
 import { newId } from "./ids";
+import { EMBEDDED_TOKEN_PREFIX, sessionCookieName } from "./session-cookie";
 
 /** As better-auth is configured in auth.server.ts. */
 export const SESSION_SECONDS = 30 * 24 * 3600;
 
-const COOKIE = "better-auth.session_token";
-
-/** Better Auth's session cookie name, which takes a prefix on https. */
-export function sessionCookieName(secure: boolean): string {
-  return secure ? `__Secure-${COOKIE}` : COOKIE;
-}
 
 /** A cookie value signed as better-call signs it: `value.base64(HMAC-SHA256)`, URL-encoded. */
 export async function signCookieValue(value: string, secret: string): Promise<string> {
@@ -35,7 +30,7 @@ export async function startSession(
   db: D1Database,
   input: { userId: string; request: Request; secret: string; now: number; embedded?: boolean },
 ): Promise<string> {
-  const token = newId(32);
+  const token = input.embedded ? `${EMBEDDED_TOKEN_PREFIX}${newId(32)}` : newId(32);
   const created = new Date(input.now * 1000).toISOString();
   const expires = new Date((input.now + SESSION_SECONDS) * 1000).toISOString();
   await db
