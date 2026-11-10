@@ -41,6 +41,22 @@ bot token; see `app/lib/telegram/verify.ts`, `signForTests`).
 | `npm run telegram:setup -- <origin>` | Webhook, commands, menu button |
 | `npm run deploy:production` | Build and deploy the production Worker |
 
+## Staging
+
+`neat-link-staging` on https://neat-link-staging.borkasm.workers.dev, with the
+test bot @NeatLinkBot, its own D1 (`neat-link-staging`) and R2
+(`neat-link-staging-media`), and `ENVIRONMENT=staging`, so nothing is indexed.
+
+```sh
+npm run db:migrate:staging
+npm run deploy:staging
+npm run secret:staging -- <NAME>      # same secrets as production, for the test bot
+TELEGRAM_BOT_TOKEN=… TELEGRAM_WEBHOOK_SECRET=… npm run telegram:setup -- https://neat-link-staging.borkasm.workers.dev
+```
+
+Bot tokens live in the gitignored `.env` (`STAGING_BOT_TOKEN`,
+`PRODUCTION_BOT_TOKEN`, `STAGING_WEBHOOK_SECRET`).
+
 ## Going live
 
 1. Create the resources: `wrangler d1 create neat-link` (put its id in

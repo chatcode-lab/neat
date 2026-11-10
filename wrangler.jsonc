@@ -74,6 +74,54 @@
 		"crons": ["23 * * * *"]
 	},
 	"env": {
+		// Staging on workers.dev, with the test bot @NeatLinkBot, its own
+		// database and bucket, and nothing indexed (ENVIRONMENT is not
+		// "production"). Media is served through the Worker at /media/<key>.
+		"staging": {
+			"name": "neat-link-staging",
+			"workers_dev": true,
+			"preview_urls": false,
+			"vars": {
+				"ENVIRONMENT": "staging",
+				"MEDIA_ORIGIN": "",
+				"TELEGRAM_BOT_USERNAME": "NeatLinkBot"
+			},
+			"secrets": {
+				"required": [
+					"BETTER_AUTH_SECRET",
+					"GOOGLE_CLIENT_ID",
+					"GOOGLE_CLIENT_SECRET",
+					"TELEGRAM_BOT_TOKEN",
+					"TELEGRAM_WEBHOOK_SECRET"
+				]
+			},
+			"d1_databases": [
+				{
+					"binding": "DB",
+					"database_name": "neat-link-staging",
+					"database_id": "0380bdcc-e4c6-48ee-b4d4-1b15a3fb3bfa",
+					"migrations_dir": "migrations"
+				}
+			],
+			"r2_buckets": [
+				{
+					"binding": "MEDIA",
+					"bucket_name": "neat-link-staging-media"
+				}
+			],
+			"images": {
+				"binding": "IMAGING"
+			},
+			"ratelimits": [
+				{ "name": "RL_WRITE_USER", "namespace_id": "2101", "simple": { "limit": 30, "period": 60 } },
+				{ "name": "RL_WRITE_IP", "namespace_id": "2102", "simple": { "limit": 60, "period": 60 } },
+				{ "name": "RL_SIGNIN_IP", "namespace_id": "2103", "simple": { "limit": 10, "period": 60 } },
+				{ "name": "RL_READ_USER", "namespace_id": "2104", "simple": { "limit": 120, "period": 60 } },
+				{ "name": "RL_READ_IP", "namespace_id": "2105", "simple": { "limit": 240, "period": 60 } },
+				{ "name": "RL_UPLOAD_USER", "namespace_id": "2106", "simple": { "limit": 10, "period": 60 } },
+				{ "name": "RL_UPLOAD_IP", "namespace_id": "2107", "simple": { "limit": 30, "period": 60 } }
+			]
+		},
 		"production": {
 			"name": "neat-link",
 			"workers_dev": false,
