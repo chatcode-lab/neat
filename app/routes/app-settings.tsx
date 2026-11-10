@@ -17,13 +17,13 @@ export function meta() {
   return privateMeta("Settings");
 }
 
-export async function loader({ request, context }: Route.LoaderArgs) {
+export async function loader({ request, url, context }: Route.LoaderArgs) {
   const account = await requireAccount(request, context);
   const tokens = await listTokens(env.DB, account.id);
   return {
-    origin: new URL(request.url).origin,
+    origin: url.origin,
     bot: env.TELEGRAM_BOT_USERNAME,
-    linked: new URL(request.url).searchParams.get("linked"),
+    linked: url.searchParams.get("linked"),
     account: {
       name: account.name,
       email: account.email,

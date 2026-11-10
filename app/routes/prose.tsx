@@ -15,13 +15,15 @@ const PAGES: Record<string, { title: string; description: string; markdown: (ori
 };
 
 /** The site's own prose pages, written once in Markdown (app/lib/copy.ts). */
-export function loader({ request }: Route.LoaderArgs) {
-  const url = new URL(request.url);
-  const page = PAGES[url.pathname];
+export function loader({ url, pattern }: Route.LoaderArgs) {
+  // By the matched route ("agents"), not the address, which can carry a
+  // trailing slash or, on client navigations, a .data suffix in request.url.
+  const path = `/${pattern.replace(/^\/+/, "")}`;
+  const page = PAGES[path];
   if (!page) throw new Response("Not Found", { status: 404 });
   return {
     origin: url.origin,
-    path: url.pathname,
+    path,
     title: page.title,
     description: page.description,
     html: renderMarkdown(page.markdown(url.origin)),

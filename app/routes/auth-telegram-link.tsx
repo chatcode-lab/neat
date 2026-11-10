@@ -17,8 +17,8 @@ export function meta() {
  * used up by the POST that button makes, so a scanner that fetches links in
  * chats signs no one in and spends nothing.
  */
-export async function loader({ request }: Route.LoaderArgs) {
-  const token = new URL(request.url).searchParams.get("t") ?? "";
+export async function loader({ url }: Route.LoaderArgs) {
+  const token = url.searchParams.get("t") ?? "";
   const valid = Boolean(await peekTelegramToken(env.DB, token, "login", Math.floor(Date.now() / 1000)));
   if (!valid) throw redirect("/signin?error=link_expired");
   return { token };

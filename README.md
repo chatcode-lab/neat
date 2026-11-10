@@ -55,7 +55,8 @@ TELEGRAM_BOT_TOKEN=… TELEGRAM_WEBHOOK_SECRET=… npm run telegram:setup -- htt
 ```
 
 Bot tokens live in the gitignored `.env` (`STAGING_BOT_TOKEN`,
-`PRODUCTION_BOT_TOKEN`, `STAGING_WEBHOOK_SECRET`).
+`PRODUCTION_BOT_TOKEN`, `STAGING_WEBHOOK_SECRET`, and the bots' Telegram Login
+client secrets `STAGING_TELEGRAM_CLIENT_SECRET`, `PRODUCTION_TELEGRAM_CLIENT_SECRET`).
 
 ## Going live
 
@@ -66,14 +67,16 @@ Bot tokens live in the gitignored `.env` (`STAGING_BOT_TOKEN`,
 2. Secrets: `npm run secret:production -- BETTER_AUTH_SECRET`, likewise
    `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` (redirect URI
    `https://neat.link/api/auth/callback/google`), `TELEGRAM_BOT_TOKEN`,
-   `TELEGRAM_WEBHOOK_SECRET`.
+   `TELEGRAM_WEBHOOK_SECRET`, `TELEGRAM_CLIENT_SECRET` (the bot's Telegram
+   Login client secret: BotFather's mini app → the bot → Login Widget).
 3. `npm run db:migrate:production`, then import the legacy data:
    `npm run legacy:export -- <latest neat.sqlite> .wrangler/legacy`,
    `wrangler d1 execute DB --env production --remote --file .wrangler/legacy/legacy.sql`,
    `sh .wrangler/legacy/legacy-images.sh --remote`.
 4. `npm run deploy:production` (the route `neat.link/*` replaces the S3 site).
 5. Stop the legacy bot, then `npm run telegram:setup -- https://neat.link`
-   and do the two BotFather steps it prints (`/setdomain`, Mini App URL).
+   and do the two BotFather steps it prints (Login Widget allowed URLs and
+   client secret, Mini App URL).
 
 ## Layout
 

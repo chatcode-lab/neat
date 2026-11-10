@@ -1,13 +1,12 @@
 /**
- * Checks of what Telegram signs with the bot's token: the Login Widget's
- * answer (https://core.telegram.org/widgets/login#checking-authorization)
- * and a Mini App's initData
- * (https://core.telegram.org/bots/webapps#validating-data-received-via-the-mini-app).
- * Both are an HMAC-SHA256 over the received fields, sorted and joined with
- * newlines, keyed by something only the bot's owner can derive.
+ * The check of what Telegram signs with the bot's token: a Mini App's initData
+ * (https://core.telegram.org/bots/webapps#validating-data-received-via-the-mini-app),
+ * an HMAC-SHA256 over the received fields, sorted and joined with newlines,
+ * keyed by something only the bot's owner can derive. Signing in on the web
+ * is Telegram Login (OpenID Connect), in login.ts.
  */
 
-/** A Telegram user as both checks return them. */
+/** A Telegram user, as a Mini App launch or Telegram Login names them. */
 export interface TelegramUser {
   id: number;
   firstName: string;
@@ -48,33 +47,6 @@ function dataCheckString(fields: Map<string, string>, leaveOut: readonly string[
 function freshEnough(authDate: string | undefined, now: number): boolean {
   const at = Number(authDate);
   return Number.isInteger(at) && at <= now + 60 && now - at <= MAX_AUTH_AGE_SECONDS;
-}
-
-/**
- * The Login Widget's answer, as the query of its redirect: the user's id,
- * names, username, photo_url, auth_date and hash. The key is the SHA-256 of
- * the bot's token. Null when it is not genuine or too old.
- */
-export async function verifyLoginWidget(params: URLSearchParams, botToken: string, now: number): Promise<TelegramUser | null> {
-  const fields = new Map<string, string>();
-  for (const key of ["id", "first_name", "last_name", "username", "photo_url", "auth_date", "hash"]) {
-    const value = params.get(key);
-    if (value !== null) fields.set(key, value);
-  }
-  const hash = fields.get("hash");
-  if (!hash || !freshEnough(fields.get("auth_date"), now)) return null;
-  const secret = await crypto.subtle.digest("SHA-256", encoder.encode(botToken));
-  const expected = hex(await hmac(secret, dataCheckString(fields, ["hash"])));
-  if (!sameText(expected, hash.toLowerCase())) return null;
-  const id = Number(fields.get("id"));
-  if (!Number.isSafeInteger(id) || id <= 0) return null;
-  return {
-    id,
-    firstName: fields.get("first_name") ?? "",
-    lastName: fields.get("last_name") ?? null,
-    username: fields.get("username") ?? null,
-    photoUrl: fields.get("photo_url") ?? null,
-  };
 }
 
 /** A Mini App launch: who opened it and what it was opened with. */
@@ -130,16 +102,8 @@ export function telegramName(user: Pick<TelegramUser, "firstName" | "lastName">)
   return [user.firstName, user.lastName].filter(Boolean).join(" ").trim() || "Telegram user";
 }
 
-/** Signs fields the way Telegram does, for tests and local development only. */
-export async function signForTests(
-  fields: Record<string, string>,
-  botToken: string,
-  kind: "widget" | "webapp",
-): Promise<string> {
-  const map = new Map(Object.entries(fields));
-  const secret =
-    kind === "widget"
-      ? await crypto.subtle.digest("SHA-256", encoder.encode(botToken))
-      : await hmac(encoder.encode("WebAppData"), botToken);
-  return hex(await hmac(secret, dataCheckString(map, ["hash"])));
+/** Signs initData fields the way Telegram does, for tests and local development only. */
+export async function signForTests(fields: Record<string, string>, botToken: string): Promise<string> {
+  const secret = await hmac(encoder.encode("WebAppData"), botToken);
+  return hex(await hmac(secret, dataCheckString(new Map(Object.entries(fields)), ["hash"])));
 }

@@ -21,7 +21,7 @@ export async function signCookieValue(value: string, secret: string): Promise<st
 
 /**
  * Starts a Better Auth session for an account that proved who it is some
- * other way than Better Auth's providers: by Telegram (the Login Widget, a
+ * other way than Better Auth's providers: by Telegram (Telegram Login, a
  * Mini App launch, or a sign-in link from the bot). The session is an
  * ordinary row in Better Auth's table with its usual signed cookie, so
  * everything else, signing out included, works as for Google.

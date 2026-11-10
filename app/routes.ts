@@ -10,9 +10,10 @@ export default [
   route("terms", "routes/prose.tsx", { id: "routes/terms" }),
   route("privacy", "routes/prose.tsx", { id: "routes/privacy" }),
 
-  // Signing in with Telegram: Telegram's own sign-in page or Login Widget,
-  // the Mini App, and a link the bot sends.
-  route("auth/telegram/widget", "routes/auth-telegram-widget.tsx"),
+  // Signing in with Telegram: Telegram Login (OpenID Connect), the Mini App,
+  // and a link the bot sends.
+  route("auth/telegram", "routes/auth-telegram.ts"),
+  route("auth/telegram/callback", "routes/auth-telegram-callback.ts"),
   route("auth/telegram/webapp", "routes/auth-telegram-webapp.ts"),
   route("auth/telegram/link", "routes/auth-telegram-link.tsx"),
   // The Mini App's entry, opened from the bot.

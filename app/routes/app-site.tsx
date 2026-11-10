@@ -25,9 +25,8 @@ export function meta({ loaderData }: Route.MetaArgs) {
   return privateMeta(loaderData ? `Edit ${loaderData.handle}` : "Edit");
 }
 
-export async function loader({ request, params, context }: Route.LoaderArgs) {
+export async function loader({ request, url, params, context }: Route.LoaderArgs) {
   const account = await requireAccount(request, context);
-  const url = new URL(request.url);
   let site;
   try {
     site = await requireOwnedSite(account, params.handle);
@@ -50,10 +49,9 @@ export async function loader({ request, params, context }: Route.LoaderArgs) {
 
 type ActionResult = { ok: true; message: string } | { error: string };
 
-export async function action({ request, params, context }: Route.ActionArgs): Promise<ActionResult | Response> {
+export async function action({ request, url, params, context }: Route.ActionArgs): Promise<ActionResult | Response> {
   const account = await requireAccount(request, context);
   const now = Math.floor(Date.now() / 1000);
-  const url = new URL(request.url);
   const picture = (request.headers.get("Content-Type") ?? "").startsWith("multipart/form-data");
   if (picture && Number(request.headers.get("Content-Length") ?? "0") > MAX_UPLOAD_BYTES + 64 * 1024) {
     return { error: "That picture is over 8 MB." };

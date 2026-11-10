@@ -1,3 +1,4 @@
+import { env } from "cloudflare:workers";
 import { ExternalLink, Pencil, Plus } from "lucide-react";
 import { Link } from "react-router";
 
@@ -13,9 +14,8 @@ export function meta() {
   return privateMeta("My pages");
 }
 
-export async function loader({ request, context }: Route.LoaderArgs) {
+export async function loader({ request, url, context }: Route.LoaderArgs) {
   const account = await requireAccount(request, context);
-  const url = new URL(request.url);
   const sites = await listSites(account);
   return {
     host: url.host,
@@ -23,6 +23,7 @@ export async function loader({ request, context }: Route.LoaderArgs) {
     canCreate: sites.length < MAX_SITES,
     maxSites: MAX_SITES,
     telegramLinked: Boolean(account.telegram),
+    bot: env.TELEGRAM_BOT_USERNAME,
     sites: sites.map((site) => ({
       handle: site.handle,
       title: site.page.title,
@@ -88,7 +89,7 @@ export default function MyPages({ loaderData }: Route.ComponentProps) {
       ) : null}
       {!loaderData.telegramLinked ? (
         <p className="text-sm text-text-muted">
-          Tip: <Link className="text-accent underline" to="/app/settings">link Telegram</Link> to edit your pages from @neatlink_bot.
+          Tip: <Link className="text-accent underline" to="/app/settings">link Telegram</Link> to edit your pages from @{loaderData.bot}.
         </p>
       ) : null}
     </main>

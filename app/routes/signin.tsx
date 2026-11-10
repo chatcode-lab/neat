@@ -5,7 +5,6 @@ import { googleSignIn } from "~/lib/auth.server";
 import { privateMeta } from "~/lib/meta";
 import { withinLimits } from "~/lib/security/rate-limit.server";
 import { safeReturnPath } from "~/lib/security/request";
-import { telegramLoginUrl } from "~/lib/telegram/signin.server";
 import { viewerOf } from "~/lib/viewer.server";
 
 import type { Route } from "./+types/signin";
@@ -28,21 +27,19 @@ const ERRORS: Record<string, string> = {
   link_expired: "That sign-in link was used already or has expired. Send /login to the bot for a new one.",
 };
 
-export async function loader({ request, context }: Route.LoaderArgs) {
-  const url = new URL(request.url);
+export async function loader({ url, context }: Route.LoaderArgs) {
   const next = safeReturnPath(url.searchParams.get("next") ?? "/app", url.origin);
   if (await viewerOf(context)) throw redirect(next);
   const error = url.searchParams.get("error");
   return {
     next,
     error: error ? (ERRORS[error] ?? "Signing in did not work. Try again.") : null,
-    telegramUrl: telegramLoginUrl(url.origin, `${url.origin}/auth/telegram/widget?${new URLSearchParams({ next })}`),
+    telegramUrl: `/auth/telegram?${new URLSearchParams({ next })}`,
     bot: env.TELEGRAM_BOT_USERNAME,
   };
 }
 
-export async function action({ request }: Route.ActionArgs) {
-  const url = new URL(request.url);
+export async function action({ request, url }: Route.ActionArgs) {
   const form = await request.formData();
   const next = safeReturnPath(String(form.get("next") ?? "/app"), url.origin);
   if (!(await withinLimits(request, "signin", null))) {

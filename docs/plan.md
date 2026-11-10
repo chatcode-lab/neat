@@ -57,7 +57,13 @@ Dropped on purpose:
 - **Telegram is a linked identity**, not a way to sign up: an `account` row
   with `providerId = 'telegram'` and the Telegram user ID as `accountId`.
   Once linked it signs in three ways:
-  1. the Telegram Login Widget on `/signin` (needs `/setdomain` in BotFather),
+  1. Telegram Login on `/signin` (https://core.telegram.org/bots/telegram-login):
+     OpenID Connect's code flow with PKCE at oauth.telegram.org, the bot's ID
+     as client ID and its client secret from BotFather (Login Widget, where
+     the site's origin and `/auth/telegram/callback` must be allowed URLs).
+     The ID token is checked against Telegram's JWKS. It asks for `openid
+     profile` only. It replaced the legacy Login Widget (hash keyed by the
+     bot token), which is no longer used,
   2. the Mini App: `initData` signed by the bot token, verified server-side,
   3. a one-time sign-in link the bot sends (`/login`), valid 10 minutes and
      consumed by a POST so link scanners cannot use it.
@@ -153,9 +159,11 @@ Cut-over:
 2. Apply migrations and import the legacy SQL to production D1; copy pictures.
 3. Stop the legacy bot, then `npm run telegram:setup` to set the webhook,
    commands and the menu button (opens the editor).
-4. In BotFather: `/setdomain` → `neat.link` for the Login Widget, and the
-   Mini App URL → `https://neat.link/tg` (legacy `?startapp=<handle>` links
-   then open that page).
+4. In BotFather's mini app, the bot's Login Widget: allowed URLs
+   `https://neat.link` and `https://neat.link/auth/telegram/callback`, and its
+   client secret into `TELEGRAM_CLIENT_SECRET`. Then the Mini App URL →
+   `https://neat.link/tg` (legacy `?startapp=<handle>` links then open that
+   page).
 
 ## Later (paid, one-time payment ~$100)
 

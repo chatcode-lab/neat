@@ -1,3 +1,4 @@
+import { env } from "cloudflare:workers";
 import { Link } from "react-router";
 
 import { PageCard } from "~/components/page-card";
@@ -8,12 +9,13 @@ import { viewerOf } from "~/lib/viewer.server";
 
 import type { Route } from "./+types/home";
 
-export async function loader({ request, context }: Route.LoaderArgs) {
-  const origin = new URL(request.url).origin;
+export async function loader({ url, context }: Route.LoaderArgs) {
+  const origin = url.origin;
   return {
     origin,
-    host: new URL(request.url).host,
+    host: url.host,
     signedIn: Boolean(await viewerOf(context)),
+    bot: env.TELEGRAM_BOT_USERNAME,
     example: { ...EXAMPLE, bodyHtml: renderMarkdown(EXAMPLE.body) },
   };
 }
@@ -40,12 +42,12 @@ const EXAMPLE = {
   picture: null,
 };
 
-const POINTS = [
+const points = (bot: string) => [
   ["Nothing to design", "A page is a title, a short text and buttons. It looks right on every phone, in light and dark."],
   ["Agent-friendly", "Let Claude, ChatGPT or any MCP client write and update it. Every page is also Markdown at /yourname.md."],
   ["Findable", "Pages load instantly, show a proper preview when shared, and are listed for search engines."],
-  ["Telegram too", "Open the editor right inside Telegram from @neatlink_bot."],
-] as const;
+  ["Telegram too", `Open the editor right inside Telegram from @${bot}.`],
+];
 
 export default function Home({ loaderData }: Route.ComponentProps) {
   return (
@@ -69,7 +71,7 @@ export default function Home({ loaderData }: Route.ComponentProps) {
         <PageCard page={loaderData.example} compact />
       </section>
       <section className="grid gap-6 sm:grid-cols-2">
-        {POINTS.map(([title, text]) => (
+        {points(loaderData.bot).map(([title, text]) => (
           <div key={title}>
             <h2 className="font-semibold">{title}</h2>
             <p className="mt-1 text-text-muted">{text}</p>

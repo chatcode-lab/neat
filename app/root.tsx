@@ -1,3 +1,4 @@
+import { env } from "cloudflare:workers";
 import { useEffect } from "react";
 import {
   isRouteErrorResponse,
@@ -11,6 +12,8 @@ import {
 } from "react-router";
 
 import type { Route } from "./+types/root";
+import "@fontsource-variable/inter";
+import "@fontsource-variable/rubik";
 import "./app.css";
 import { SiteFooter, SiteHeader } from "./components/chrome";
 import { useTheme } from "./components/theme-switch";
@@ -22,6 +25,8 @@ export async function loader({ request, context }: Route.LoaderArgs) {
   return {
     theme: readTheme(request.headers.get("Cookie")),
     viewer: viewer ? { name: viewer.name, image: viewer.image } : null,
+    // The bot this deployment answers as (the test bot on staging).
+    bot: env.TELEGRAM_BOT_USERNAME,
   };
 }
 
@@ -65,7 +70,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
       <body className="flex min-h-dvh flex-col">
         {bare ? null : <SiteHeader viewer={data?.viewer ?? null} theme={theme} />}
         <div className="flex flex-1 flex-col">{children}</div>
-        {bare ? null : <SiteFooter />}
+        {bare ? null : <SiteFooter bot={data?.bot ?? "neatlink_bot"} />}
         <ScrollRestoration />
         <Scripts />
       </body>

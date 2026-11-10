@@ -13,10 +13,10 @@ export function meta() {
   return privateMeta("New page");
 }
 
-export async function loader({ request, context }: Route.LoaderArgs) {
+export async function loader({ request, url, context }: Route.LoaderArgs) {
   const account = await requireAccount(request, context);
   return {
-    host: new URL(request.url).host,
+    host: url.host,
     handle: await suggestHandle(env.DB, [account.telegram?.username, account.email?.split("@")[0], account.name]),
     title: account.name,
   };

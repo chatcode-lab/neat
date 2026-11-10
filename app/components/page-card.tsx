@@ -53,7 +53,7 @@ export function PageCard({ page, compact = false }: { page: PageCardData; compac
                 <a
                   href={button.url}
                   {...(web ? { target: "_blank", rel: "me noopener" } : {})}
-                  className="relative flex min-h-12 w-full items-center justify-center rounded-xl border border-border bg-surface px-12 py-2.5 text-base font-medium shadow-[0_1px_0_var(--border)] transition-colors hover:border-border-strong hover:bg-surface-2"
+                  className="relative flex min-h-12 w-full items-center justify-center rounded-xl border border-border bg-surface px-12 py-2.5 font-button text-base shadow-[0_1px_0_var(--border)] transition-colors hover:border-border-strong hover:bg-surface-2"
                 >
                   <span className="absolute left-4 flex text-text-muted">
                     <LinkIcon kind={kind} />

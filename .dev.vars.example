@@ -14,3 +14,8 @@ GOOGLE_CLIENT_SECRET=replace-with-your-client-secret
 # webhook), and any random string for the webhook's secret header.
 TELEGRAM_BOT_TOKEN=123456:replace-with-a-test-bot-token
 TELEGRAM_WEBHOOK_SECRET=replace-with-a-random-string
+
+# Telegram Login: the test bot's client secret, from @BotFather's mini app
+# (your bot → Login Widget), whose allowed URLs must include
+# http://localhost:5173 and http://localhost:5173/auth/telegram/callback.
+TELEGRAM_CLIENT_SECRET=replace-with-the-bots-client-secret

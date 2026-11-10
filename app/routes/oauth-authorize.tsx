@@ -24,8 +24,7 @@ function hostOf(address: string): string {
   }
 }
 
-export async function loader({ request, context }: Route.LoaderArgs) {
-  const url = new URL(request.url);
+export async function loader({ request, url, context }: Route.LoaderArgs) {
   // Signed in first, and within the limit: reading the request may fetch the
   // app's description from its own address.
   const viewer = await viewerOf(context);
@@ -45,8 +44,7 @@ export async function loader({ request, context }: Route.LoaderArgs) {
   };
 }
 
-export async function action({ request, context }: Route.ActionArgs) {
-  const url = new URL(request.url);
+export async function action({ request, url, context }: Route.ActionArgs) {
   const viewer = await viewerOf(context);
   if (!viewer) return { error: "Sign in first." };
   if (!(await withinLimits(request, "signin", viewer.id))) return { error: RATE_LIMITED_MESSAGE };

@@ -106,7 +106,7 @@ async function serve(request: Request, ctx: ExecutionContext): Promise<Response>
     const document = discovery(url.pathname, url.origin);
     if (document) return secure(document);
     if (url.pathname === "/robots.txt") return secure(text(robotsTxt(url.origin, options.indexable), "text/plain"));
-    if (url.pathname === "/llms.txt") return secure(text(llmsTxt(url.origin), "text/plain"));
+    if (url.pathname === "/llms.txt") return secure(text(llmsTxt(url.origin, env.TELEGRAM_BOT_USERNAME), "text/plain"));
     if (url.pathname === "/sitemap.xml") {
       const response = await cached(ctx, `${url.origin}/sitemap.xml`, async () =>
         text(await sitemapXml(env.DB, url.origin), "application/xml"),

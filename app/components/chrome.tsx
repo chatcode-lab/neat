@@ -41,13 +41,13 @@ export function SiteHeader({ viewer, theme }: { viewer: { name: string; image: s
   );
 }
 
-export function SiteFooter() {
+export function SiteFooter({ bot }: { bot: string }) {
   return (
     <footer className="mt-12 border-t border-border">
       <div className="mx-auto flex w-full max-w-column flex-wrap items-center justify-center gap-x-4 gap-y-1 px-4 py-6 text-sm text-text-faint">
         <Link to="/agents">For agents</Link>
         <a href="/api/v1">API</a>
-        <a href="https://t.me/neatlink_bot">Telegram bot</a>
+        <a href={`https://t.me/${bot}`}>Telegram bot</a>
         <Link to="/terms">Terms</Link>
         <Link to="/privacy">Privacy</Link>
       </div>

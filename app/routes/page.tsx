@@ -18,7 +18,7 @@ export const handle: RouteHandle = { bare: true };
  * A site's main page at /<handle>. Drafts are shown to their owner only,
  * with a note, and are kept out of search engines.
  */
-export async function loader({ params, request, context }: Route.LoaderArgs) {
+export async function loader({ params, url, context }: Route.LoaderArgs) {
   const handle = params.handle.toLowerCase();
   if (!HANDLE_PATTERN.test(handle)) throw data(null, { status: 404 });
   const site = await siteByHandle(env.DB, handle);
@@ -26,14 +26,14 @@ export async function loader({ params, request, context }: Route.LoaderArgs) {
   const viewer = site.published ? null : await viewerOf(context);
   if (!site.published && viewer?.id !== site.ownerId) throw data(null, { status: 404 });
   // An address in another case is sent to the one true address.
-  if (params.handle !== site.handle) throw Response.redirect(new URL(`/${site.handle}`, request.url).href, 301);
+  if (params.handle !== site.handle) throw Response.redirect(new URL(`/${site.handle}`, url).href, 301);
 
-  const origin = new URL(request.url).origin;
+  const origin = url.origin;
   return {
     handle: site.handle,
     published: site.published,
     origin,
-    host: new URL(request.url).host,
+    host: url.host,
     cover: `${origin}/og/${site.handle}.png?v=${coverVersion(site)}`,
     description: summary([site.page.headline, site.page.body].filter(Boolean).join("\n\n")) || `${site.page.title} on neat.link`,
     page: {

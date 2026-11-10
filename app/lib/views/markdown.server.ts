@@ -1,3 +1,5 @@
+import { env } from "cloudflare:workers";
+
 import { shortUrl } from "../buttons";
 import { agentsMarkdown, homeMarkdown, privacyMarkdown, termsMarkdown } from "../copy";
 import { siteByHandle } from "../db/sites.server";
@@ -69,7 +71,7 @@ function markdownResponse(body: string, canonical: string, maxAge = 60): Respons
 
 /** The site's own pages that have Markdown, by path. */
 const STATIC_PAGES: Record<string, (origin: string) => string> = {
-  "/": homeMarkdown,
+  "/": (origin) => homeMarkdown(origin, env.TELEGRAM_BOT_USERNAME),
   "/agents": agentsMarkdown,
   "/terms": termsMarkdown,
   "/privacy": privacyMarkdown,

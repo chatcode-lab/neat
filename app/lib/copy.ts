@@ -5,7 +5,7 @@
 
 export const TAGLINE = "One neat page for all your links.";
 
-export function homeMarkdown(origin: string): string {
+export function homeMarkdown(origin: string, bot: string): string {
   const host = new URL(origin).host;
   return `# neat.link
 
@@ -15,7 +15,7 @@ place people can find you: ${host}/yourname.
 - **Simple.** A page is a title, a short Markdown text and buttons. Nothing to design.
 - **Fast and findable.** Pages load instantly, look right in light and dark, and are listed for search engines.
 - **Agent-friendly.** Let Claude, ChatGPT or any MCP client write and update your page. Every page is also Markdown at ${host}/yourname.md.
-- **Telegram too.** Open the editor from [@neatlink_bot](https://t.me/neatlink_bot).
+- **Telegram too.** Open the editor from [@${bot}](https://t.me/${bot}).
 
 [Create your page](${origin}/signin) · [For agents](${origin}/agents) · [API](${origin}/api/v1)
 `;

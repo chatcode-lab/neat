@@ -12,8 +12,8 @@ export function meta() {
   return privateMeta("neat.link");
 }
 
-export function loader({ request }: Route.LoaderArgs) {
-  return { origin: new URL(request.url).origin, bot: env.TELEGRAM_BOT_USERNAME };
+export function loader({ url }: Route.LoaderArgs) {
+  return { origin: url.origin, bot: env.TELEGRAM_BOT_USERNAME };
 }
 
 interface TelegramWebApp {

@@ -1,7 +1,6 @@
 const GOOGLE_ACCOUNTS_ORIGIN = "https://accounts.google.com";
-// The Login Widget's script and frame, and the Mini App's script.
+// The Mini App's script. Telegram Login is a redirect, with nothing embedded.
 const TELEGRAM_ORIGIN = "https://telegram.org";
-const TELEGRAM_OAUTH_ORIGIN = "https://oauth.telegram.org";
 // Telegram's web clients, which show a Mini App in a frame.
 export const TELEGRAM_WEB_ORIGINS = ["https://web.telegram.org"];
 
@@ -29,8 +28,8 @@ export interface SitePolicyOptions {
 
 /**
  * The policy for every response. Only first-party scripts and Telegram's
- * own may run, the only frame is Telegram's Login Widget, and pages cannot
- * be framed except the editor by Telegram's web clients.
+ * Mini App script may run, nothing is framed, and pages cannot be framed
+ * except the editor and public pages, by Telegram's web clients.
  */
 export function buildSitePolicy({ nonce, dev = false, mediaOrigin, frameable = false }: SitePolicyOptions): string {
   return serialize({
@@ -42,7 +41,7 @@ export function buildSitePolicy({ nonce, dev = false, mediaOrigin, frameable = f
     "img-src": ["'self'", "data:", "blob:", ...(mediaOrigin ? [mediaOrigin] : [])],
     "font-src": ["'self'"],
     "connect-src": dev ? ["'self'", "ws:"] : ["'self'"],
-    "frame-src": [TELEGRAM_OAUTH_ORIGIN],
+    "frame-src": ["'none'"],
     "frame-ancestors": frameable ? ["'self'", ...TELEGRAM_WEB_ORIGINS] : ["'none'"],
     "base-uri": ["'self'"],
     // Chrome applies `form-action` to redirects after a form post, which Google's sign-in is.

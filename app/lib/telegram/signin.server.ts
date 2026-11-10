@@ -21,22 +21,7 @@ export async function telegramSession(
   return startSession(env.DB, { userId, request, secret: env.BETTER_AUTH_SECRET, now, embedded: options.embedded });
 }
 
-/** The bot's numeric ID, the part of its token before the colon. */
+/** The bot's numeric ID, the part of its token before the colon; also its Telegram Login client ID. */
 export function botId(): string {
   return env.TELEGRAM_BOT_TOKEN.split(":")[0] ?? "";
-}
-
-/**
- * Telegram's own sign-in page for this bot, which sends the person back to
- * `returnTo` with the signed answer in the address's #tgAuthResult. It is
- * what the Login Widget opens, used directly so the page needs no script.
- * BotFather's /setdomain must name this site's domain.
- */
-export function telegramLoginUrl(origin: string, returnTo: string): string {
-  const url = new URL("https://oauth.telegram.org/auth");
-  url.searchParams.set("bot_id", botId());
-  url.searchParams.set("origin", origin);
-  url.searchParams.set("request_access", "write");
-  url.searchParams.set("return_to", returnTo);
-  return url.href;
 }

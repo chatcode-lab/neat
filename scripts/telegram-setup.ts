@@ -49,9 +49,10 @@ await call("setMyDescription", {
 const info = (await call("getWebhookInfo", {})) as { url: string; pending_update_count: number; last_error_message?: string };
 console.log(info);
 
-const host = new URL(origin).host;
 console.log(`
 Still to do in @BotFather (once):
-  /setdomain       → ${host}            (Telegram sign-in on ${host}/signin)
+  Mini app → this bot → Login Widget (Telegram Login on /signin):
+      Allowed URLs: ${origin}  and  ${origin}/auth/telegram/callback
+      Copy the Client Secret into the TELEGRAM_CLIENT_SECRET secret.
   /mybots → Bot Settings → Configure Mini App → ${origin}/tg
-                     (legacy t.me/<bot>?startapp=<handle> links then open that page)`);
+      (legacy t.me/<bot>?startapp=<handle> links then open that page)`);

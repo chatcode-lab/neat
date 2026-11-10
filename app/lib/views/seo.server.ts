@@ -24,13 +24,13 @@ export function robotsTxt(origin: string, indexable: boolean): string {
 }
 
 /** `/llms.txt` (llmstxt.org): what neat.link is, for language models, and where to read on. */
-export function llmsTxt(origin: string): string {
+export function llmsTxt(origin: string, bot: string): string {
   return [
     "# neat.link",
     "",
     `> ${TAGLINE} Mini business-card pages at ${origin}/<handle>: a picture, a title, a headline, a short Markdown text and a column of buttons.`,
     "",
-    "Every published page is Markdown at its address plus `.md`. Accounts manage their pages in a web editor, the Telegram bot @neatlink_bot, an HTTP API, or an MCP server with OAuth.",
+    `Every published page is Markdown at its address plus \`.md\`. Accounts manage their pages in a web editor, the Telegram bot @${bot}, an HTTP API, or an MCP server with OAuth.`,
     "",
     "## For agents",
     "",
