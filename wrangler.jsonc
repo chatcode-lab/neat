@@ -151,17 +151,15 @@
 					"TELEGRAM_WEBHOOK_SECRET"
 				]
 			},
-			// Create with `wrangler d1 create neat-link` and paste its id here.
 			"d1_databases": [
 				{
 					"binding": "DB",
 					"database_name": "neat-link",
-					"database_id": "00000000-0000-0000-0000-000000000000",
+					"database_id": "9fdfd31c-18e7-49a1-a30a-b60c1c17986b",
 					"migrations_dir": "migrations"
 				}
 			],
-			// Create with `wrangler r2 bucket create neat-link-media` and attach
-			// media.neat.link as its public custom domain.
+			// Served at its public custom domain, media.neat.link.
 			"r2_buckets": [
 				{
 					"binding": "MEDIA",
