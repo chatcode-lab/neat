@@ -73,7 +73,7 @@ export default function Home({ loaderData }: Route.ComponentProps) {
         </div>
       </section>
       <section aria-label="An example page" className="rounded-md border border-border bg-bg px-5 py-10 shadow-sm">
-        <PageCard page={loaderData.example} compact />
+        <PageCard page={loaderData.example} />
       </section>
       <section className="grid gap-6 sm:grid-cols-2">
         {points(loaderData.bot).map(([title, text]) => (

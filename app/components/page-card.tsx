@@ -23,7 +23,7 @@ const AVATAR =
  */
 export function PageCard({ page, compact = false }: { page: PageCardData; compact?: boolean }) {
   return (
-    <article className={`mx-auto flex w-full max-w-card flex-col items-center text-center ${compact ? "gap-3" : "gap-4"}`}>
+    <article className={`@container mx-auto flex w-full max-w-card flex-col items-center text-center ${compact ? "gap-3" : "gap-4"}`}>
       {page.picture ? (
         <img
           src={page.picture}
@@ -51,8 +51,10 @@ export function PageCard({ page, compact = false }: { page: PageCardData; compac
       {page.bodyHtml ? <div className="prose w-full text-text-muted" dangerouslySetInnerHTML={{ __html: page.bodyHtml }} /> : null}
       {page.buttons.length > 0 ? (
         // As wide as the longest label with room around it, as on the legacy
-        // pages; the full width on phones and in the editor's preview.
-        <ul className={`mt-2 flex w-full max-w-full flex-col gap-3 ${compact ? "" : "sm:w-auto sm:min-w-72"}`}>
+        // pages, once the card is wide enough; the full width when it is
+        // narrow, as on a phone or in the editor's preview. The card's own
+        // width decides, so every preview shows what a visitor would see.
+        <ul className="mt-2 flex w-full max-w-full flex-col gap-3 @lg:w-auto @lg:min-w-72">
           {page.buttons.map((button, index) => {
             const kind = linkKind(button.url);
             const web = /^https?:/i.test(button.url);
@@ -61,7 +63,7 @@ export function PageCard({ page, compact = false }: { page: PageCardData; compac
                 <a
                   href={button.url}
                   {...(web ? { target: "_blank", rel: "me noopener" } : {})}
-                  className={`page-button page-button-${kind} flex min-h-11 w-full items-center justify-center gap-2 rounded px-4 py-2 font-button text-lg font-medium ${compact ? "" : "sm:px-24"}`}
+                  className={`page-button page-button-${kind} flex min-h-11 w-full items-center justify-center gap-2 rounded px-4 py-2 font-button text-lg font-medium @lg:px-24`}
                 >
                   <span className="flex shrink-0">
                     <LinkIcon kind={kind} />

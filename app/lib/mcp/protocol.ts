@@ -189,7 +189,7 @@ async function answer<Context>(message: Message, options: ServerOptions<Context>
         outcome = await tool.run(args as Record<string, unknown>, context);
       } catch (error) {
         console.error("mcp tool", tool.name, error);
-        outcome = errorResult("Something went wrong on aion.ly. Try again in a minute.");
+        outcome = errorResult("Something went wrong on neat.link. Try again in a minute.");
       }
       return reply(result(id, { ...outcome }, modern));
     }
@@ -255,7 +255,7 @@ export async function handleMcp<Context>(request: Request, options: ServerOption
 
   const context = await options.authorize(request);
   if (context === null) {
-    return json(rpcError(null, -32001, "Sign in to aion.ly to use its tools."), 401, { "WWW-Authenticate": options.challenge });
+    return json(rpcError(null, -32001, "Sign in to neat.link to use its tools."), 401, { "WWW-Authenticate": options.challenge });
   }
   if (options.admit && !(await options.admit(request, context))) {
     return json(rpcError(null, -32000, "That was a lot at once. Wait a minute, then try again."), 429, { "Retry-After": "60" });
