@@ -98,7 +98,7 @@ export default function Authorize({ loaderData, actionData }: Route.ComponentPro
           until you disconnect it in Settings.
         </p>
       </div>
-      <dl className="rounded-xl border border-border bg-surface px-4 py-3 text-sm">
+      <dl className="rounded border border-border bg-surface px-4 py-3 text-sm">
         <div className="flex justify-between gap-3">
           <dt className="text-text-muted">Returns to</dt>
           <dd className="font-medium">{loaderData.client.returnsTo}</dd>
@@ -111,13 +111,13 @@ export default function Authorize({ loaderData, actionData }: Route.ComponentPro
         ) : null}
       </dl>
       {actionData && "error" in actionData ? (
-        <p role="alert" className="rounded-xl bg-danger-soft px-4 py-3 text-sm text-danger">
+        <p role="alert" className="rounded bg-danger-soft px-4 py-3 text-sm text-danger">
           {actionData.error}
         </p>
       ) : null}
       {continueTo ? (
         <p className="text-center text-text-muted">
-          Returning to the app… <a className="text-accent underline" href={continueTo}>Continue</a>
+          Returning to the app… <a className="text-link" href={continueTo}>Continue</a>
         </p>
       ) : (
         <Form method="post" className="flex gap-2">

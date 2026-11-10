@@ -154,8 +154,18 @@ Most traffic is visitors reading pages, so that path is kept cheap:
 
 Minimal and functional. One column, Inter (Rubik on page buttons, as on the
 legacy pages), served from the site itself, semantic colour
-tokens with light and dark schemes. Monochrome for now: the accent is the
-text colour, and only errors and confirmations have a hue. Public pages follow the visitor's system
+tokens with light and dark schemes. The look follows the legacy pages
+(neat.link/elon was the reference): white or zinc-800 behind, Tailwind's zinc
+greys, muted body text with grey medium-weight links that underline on
+hover, an extra-bold title, the round picture with a soft shadow, and the
+page centred in the window. A page's buttons wear their services' colours
+(the legacy values, the brand's for services the legacy did not know, the
+legacy blue-to-teal for other links), with small corners, Rubik, and the
+legacy width: as wide as the longest label plus room on wider screens, the
+full width on phones. The rest of the site is monochrome: the accent is the
+text colour, and only errors and confirmations have a hue. Dark mode keeps
+the legacy zinc-800 rather than near-black, so black buttons (X, Threads)
+and the picture's shadow stay visible. Public pages follow the visitor's system
 scheme. The editor has a System/Light/Dark switch stored in a cookie and
 applied by CSS before scripts run (aionly's approach, no flash). Site themes
 and backgrounds come later as a paid feature; `sites.theme` exists for them.

@@ -3,6 +3,8 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
+import { LINK_KINDS } from "./buttons";
+
 const css = readFileSync(fileURLToPath(new URL("../app.css", import.meta.url)), "utf8");
 
 /** The custom properties declared in the block after a `/* theme:<name> *\/` marker. */
@@ -23,5 +25,12 @@ describe("themes", () => {
 
   it("define every token in both themes", () => {
     expect(Object.keys(tokens("dark")).sort()).toEqual(Object.keys(tokens("light")).sort());
+  });
+});
+
+describe("page buttons", () => {
+  it("have a colour for every service; plain links use the base rule", () => {
+    const missing = LINK_KINDS.filter((kind) => kind !== "link" && !css.includes(`.page-button-${kind} {`));
+    expect(missing).toEqual([]);
   });
 });

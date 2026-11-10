@@ -200,12 +200,12 @@ export default function EditSite({ loaderData }: Route.ComponentProps) {
         </div>
 
         {loaderData.created ? (
-          <p className="rounded-xl bg-accent-soft px-4 py-3 text-sm">Your page is ready as a draft. Fill it in, save, then publish.</p>
+          <p className="rounded bg-accent-soft px-4 py-3 text-sm">Your page is ready as a draft. Fill it in, save, then publish.</p>
         ) : null}
         {result ? (
           <p
             role={"error" in result ? "alert" : "status"}
-            className={`rounded-xl px-4 py-3 text-sm ${"error" in result ? "bg-danger-soft text-danger" : "bg-accent-soft text-text"}`}
+            className={`rounded px-4 py-3 text-sm ${"error" in result ? "bg-danger-soft text-danger" : "bg-accent-soft text-text"}`}
           >
             {"error" in result ? result.error : result.message}
           </p>
@@ -279,7 +279,7 @@ export default function EditSite({ loaderData }: Route.ComponentProps) {
           <fieldset className="flex flex-col gap-2">
             <legend className="mb-1.5 text-sm font-medium">Buttons</legend>
             {rows.map((row, index) => (
-              <div key={row.key} className="flex flex-wrap items-center gap-2 rounded-xl border border-border bg-surface p-2 sm:flex-nowrap">
+              <div key={row.key} className="flex flex-wrap items-center gap-2 rounded border border-border bg-surface p-2 sm:flex-nowrap">
                 <input
                   aria-label={`Button ${index + 1} label`}
                   value={row.label}
@@ -335,14 +335,14 @@ export default function EditSite({ loaderData }: Route.ComponentProps) {
           </div>
         </Form>
 
-        <details className="rounded-2xl border border-border px-4 py-3">
+        <details className="rounded-md border border-border px-4 py-3">
           <summary className="cursor-pointer font-medium">Address and deletion</summary>
           <div className="mt-4 flex flex-col gap-6">
             <Form method="post" className="flex flex-col gap-2">
               <input type="hidden" name="intent" value="rename" />
               <label className="flex flex-col gap-1.5">
                 <span className="text-sm font-medium">Change the address</span>
-                <span className="flex items-center rounded-[0.6rem] border border-border-strong bg-surface">
+                <span className="flex items-center rounded border border-border-strong bg-surface">
                   <span className="pl-3 text-text-muted">{loaderData.host}/</span>
                   <input
                     name="handle"
@@ -377,7 +377,7 @@ export default function EditSite({ loaderData }: Route.ComponentProps) {
 
       <aside className="lg:sticky lg:top-6 lg:self-start" aria-label="Preview">
         <p className="mb-2 text-sm font-medium text-text-muted">Preview</p>
-        <div className="max-h-[80vh] overflow-auto rounded-3xl border border-border bg-bg px-5 py-8">
+        <div className="max-h-[80vh] overflow-auto rounded-md border border-border bg-bg px-5 py-8">
           <PageCard page={preview} compact />
         </div>
       </aside>

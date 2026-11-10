@@ -8,13 +8,15 @@ export const MAX_BUTTONS = 12;
 export const MAX_LABEL_LENGTH = 40;
 export const MAX_URL_LENGTH = 2000;
 
-/** The services a button's icon can show; anything else is a plain link. */
-export type LinkKind =
-  | "amazon" | "apple" | "behance" | "bluesky" | "discord" | "dribbble" | "email" | "facebook"
-  | "github" | "gitlab" | "instagram" | "linkedin" | "mastodon" | "medium" | "patreon" | "phone"
-  | "pinterest" | "reddit" | "signal" | "snapchat" | "soundcloud" | "spotify" | "substack"
-  | "telegram" | "threads" | "tiktok" | "twitch" | "viber" | "vk" | "whatsapp" | "x" | "youtube"
-  | "link";
+/** The services a button's icon and colour can show; anything else is a plain link. */
+export const LINK_KINDS = [
+  "amazon", "apple", "behance", "bluesky", "discord", "dribbble", "email", "facebook",
+  "github", "gitlab", "instagram", "linkedin", "mastodon", "medium", "patreon", "phone",
+  "pinterest", "reddit", "signal", "snapchat", "soundcloud", "spotify", "substack",
+  "telegram", "threads", "tiktok", "twitch", "viber", "vk", "whatsapp", "x", "youtube",
+  "link",
+] as const;
+export type LinkKind = (typeof LINK_KINDS)[number];
 
 const EMAIL = /^[a-z0-9_.+-]+@[a-z0-9-]+(?:\.[a-z0-9-]+)+$/i;
 const PHONE = /^\+?[0-9][0-9 ()-]{3,24}[0-9]$/;

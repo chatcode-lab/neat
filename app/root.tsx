@@ -70,11 +70,11 @@ export function Layout({ children }: { children: React.ReactNode }) {
         <meta name="color-scheme" content={theme === "system" ? "light dark" : theme} />
         {theme === "system" ? (
           <>
-            <meta name="theme-color" content="#f6f6f4" media="(prefers-color-scheme: light)" />
-            <meta name="theme-color" content="#111111" media="(prefers-color-scheme: dark)" />
+            <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)" />
+            <meta name="theme-color" content="#27272a" media="(prefers-color-scheme: dark)" />
           </>
         ) : (
-          <meta name="theme-color" content={theme === "dark" ? "#111111" : "#f6f6f4"} />
+          <meta name="theme-color" content={theme === "dark" ? "#27272a" : "#ffffff"} />
         )}
         <link rel="icon" href="/favicon.ico" sizes="any" />
         <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png" />

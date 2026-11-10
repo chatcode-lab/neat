@@ -60,7 +60,7 @@ export default function SignIn({ loaderData }: Route.ComponentProps) {
         <p className="mt-1 text-text-muted">New here? Continuing with Google makes your account.</p>
       </div>
       {loaderData.error ? (
-        <p role="alert" className="rounded-xl bg-danger-soft px-4 py-3 text-sm text-danger">
+        <p role="alert" className="rounded bg-danger-soft px-4 py-3 text-sm text-danger">
           {loaderData.error}
         </p>
       ) : null}
@@ -79,7 +79,7 @@ export default function SignIn({ loaderData }: Route.ComponentProps) {
         </a>
         <p className="text-center text-sm text-text-muted">
           For pages made with{" "}
-          <a className="text-accent underline" href={`https://t.me/${loaderData.bot}`}>
+          <a className="text-link" href={`https://t.me/${loaderData.bot}`}>
             @{loaderData.bot}
           </a>{" "}
           or accounts with Telegram linked. You can also send <code>/login</code> to the bot for a sign-in link.

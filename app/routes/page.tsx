@@ -63,15 +63,18 @@ export default function PublicPage({ loaderData }: Route.ComponentProps) {
   return (
     <main className="flex flex-1 flex-col px-5 pt-12 pb-8 sm:pt-16">
       {!loaderData.published ? (
-        <p className="mx-auto mb-8 rounded-full bg-accent-soft px-4 py-1.5 text-sm text-text">
+        <p className="mx-auto mb-8 rounded bg-accent-soft px-4 py-1.5 text-sm text-text">
           Draft: only you can see this page.{" "}
-          <a className="font-medium text-accent underline" href={`/app/sites/${loaderData.handle}`}>
+          <a className="text-link" href={`/app/sites/${loaderData.handle}`}>
             Edit and publish
           </a>
         </p>
       ) : null}
-      <PageCard page={loaderData.page} />
-      <footer className="mt-auto pt-14 text-center text-sm text-text-faint">
+      {/* Centred in the window, as the legacy pages were. */}
+      <div className="flex flex-1 flex-col justify-center">
+        <PageCard page={loaderData.page} />
+      </div>
+      <footer className="pt-14 text-center text-xs text-text-faint">
         <a href="/" className="inline-flex items-center gap-1 hover:text-text-muted">
           <span aria-hidden>⎆</span> {loaderData.host}
         </a>

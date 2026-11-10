@@ -72,7 +72,7 @@ export default function Home({ loaderData }: Route.ComponentProps) {
           </Link>
         </div>
       </section>
-      <section aria-label="An example page" className="rounded-3xl border border-border bg-bg px-5 py-10 shadow-sm">
+      <section aria-label="An example page" className="rounded-md border border-border bg-bg px-5 py-10 shadow-sm">
         <PageCard page={loaderData.example} compact />
       </section>
       <section className="grid gap-6 sm:grid-cols-2">

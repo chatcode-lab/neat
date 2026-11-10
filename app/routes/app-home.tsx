@@ -46,12 +46,12 @@ export default function MyPages({ loaderData }: Route.ComponentProps) {
         ) : null}
       </div>
       {loaderData.welcome && sites.length === 0 ? (
-        <p className="rounded-xl bg-accent-soft px-4 py-3">
+        <p className="rounded bg-accent-soft px-4 py-3">
           Welcome to neat.link! Make your first page: pick an address, add a picture, a few lines and your links.
         </p>
       ) : null}
       {sites.length === 0 ? (
-        <div className="flex flex-col items-center gap-3 rounded-2xl border border-dashed border-border-strong px-5 py-12 text-center">
+        <div className="flex flex-col items-center gap-3 rounded-md border border-dashed border-border-strong px-5 py-12 text-center">
           <p className="text-text-muted">You have no page yet.</p>
           <Link to="/app/new" className="btn btn-primary">
             Create your page
@@ -60,7 +60,7 @@ export default function MyPages({ loaderData }: Route.ComponentProps) {
       ) : (
         <ul className="flex flex-col gap-3">
           {sites.map((site) => (
-            <li key={site.handle} className="flex items-center gap-4 rounded-2xl border border-border bg-surface px-4 py-3">
+            <li key={site.handle} className="flex items-center gap-4 rounded-md border border-border bg-surface px-4 py-3">
               {site.picture ? (
                 <img src={site.picture} alt="" width={48} height={48} className="h-12 w-12 rounded-full object-cover" />
               ) : (
@@ -89,7 +89,7 @@ export default function MyPages({ loaderData }: Route.ComponentProps) {
       ) : null}
       {!loaderData.telegramLinked ? (
         <p className="text-sm text-text-muted">
-          Tip: <Link className="text-accent underline" to="/app/settings">link Telegram</Link> to edit your pages from @{loaderData.bot}.
+          Tip: <Link className="text-link" to="/app/settings">link Telegram</Link> to edit your pages from @{loaderData.bot}.
         </p>
       ) : null}
     </main>

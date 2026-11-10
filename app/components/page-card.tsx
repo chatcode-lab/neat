@@ -12,6 +12,10 @@ export interface PageCardData {
   picture: string | null;
 }
 
+/** The legacy pages' picture: a soft shadow and a translucent white ring. */
+const AVATAR =
+  "rounded-full border-[3px] border-[rgba(255,255,255,0.4)] object-cover shadow-[0_4px_8px_rgba(0,0,0,0.2),0_6px_20px_rgba(0,0,0,0.19)]";
+
 /**
  * A page as visitors see it: one centred column with the round picture, the
  * title, the headline, the text and the buttons. The editor's preview draws
@@ -28,12 +32,12 @@ export function PageCard({ page, compact = false }: { page: PageCardData; compac
           height={144}
           // The picture is what a visitor sees first.
           fetchPriority="high"
-          className={`${compact ? "h-24 w-24" : "h-36 w-36"} rounded-full border border-border object-cover`}
+          className={`${compact ? "h-24 w-24" : "h-36 w-36"} ${AVATAR}`}
         />
       ) : (
         <div
           aria-hidden
-          className={`${compact ? "h-24 w-24 text-3xl" : "h-36 w-36 text-5xl"} flex items-center justify-center rounded-full bg-surface-2 font-semibold text-text-muted`}
+          className={`${compact ? "h-24 w-24 text-3xl" : "h-36 w-36 text-5xl"} ${AVATAR} flex items-center justify-center bg-surface-2 font-semibold text-text-muted`}
         >
           {initials(page.title) || "⎆"}
         </div>
@@ -44,9 +48,11 @@ export function PageCard({ page, compact = false }: { page: PageCardData; compac
         </h1>
         {page.headline ? <p className="text-lg text-text-muted">{page.headline}</p> : null}
       </header>
-      {page.bodyHtml ? <div className="prose w-full" dangerouslySetInnerHTML={{ __html: page.bodyHtml }} /> : null}
+      {page.bodyHtml ? <div className="prose w-full text-text-muted" dangerouslySetInnerHTML={{ __html: page.bodyHtml }} /> : null}
       {page.buttons.length > 0 ? (
-        <ul className="mt-2 flex w-full flex-col gap-3">
+        // As wide as the longest label with room around it, as on the legacy
+        // pages; the full width on phones and in the editor's preview.
+        <ul className={`mt-2 flex w-full max-w-full flex-col gap-3 ${compact ? "" : "sm:w-auto sm:min-w-72"}`}>
           {page.buttons.map((button, index) => {
             const kind = linkKind(button.url);
             const web = /^https?:/i.test(button.url);
@@ -55,9 +61,9 @@ export function PageCard({ page, compact = false }: { page: PageCardData; compac
                 <a
                   href={button.url}
                   {...(web ? { target: "_blank", rel: "me noopener" } : {})}
-                  className="relative flex min-h-12 w-full items-center justify-center rounded-xl border border-border bg-surface px-12 py-2.5 font-button text-base shadow-[0_1px_0_var(--border)] transition-colors hover:border-border-strong hover:bg-surface-2"
+                  className={`page-button page-button-${kind} flex min-h-11 w-full items-center justify-center gap-2 rounded px-4 py-2 font-button text-lg font-medium ${compact ? "" : "sm:px-24"}`}
                 >
-                  <span className="absolute left-4 flex text-text-muted">
+                  <span className="flex shrink-0">
                     <LinkIcon kind={kind} />
                   </span>
                   <span className="[overflow-wrap:anywhere]">{button.label}</span>

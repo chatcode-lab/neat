@@ -8,18 +8,18 @@ import type { FontMetrics } from "./metrics";
  */
 
 /** Bumped when the cover's design changes, so every cover's address changes and caches draw it again. */
-export const COVER_DESIGN = "2";
+export const COVER_DESIGN = "3";
 
 export const WIDTH = 1200;
 export const HEIGHT = 630;
 
 const COLORS = {
-  ground: "#f6f6f4",
-  text: "#1c1c1b",
-  muted: "#5c5b58",
-  faint: "#8a8984",
-  ring: "#e2e1dc",
-  initialsGround: "#e7e6e1",
+  ground: "#fafafa",
+  text: "#18181b",
+  muted: "#52525b",
+  faint: "#71717a",
+  ring: "#e4e4e7",
+  initialsGround: "#f4f4f5",
 } as const;
 
 export const FAMILY = { regular: "Inter", semibold: "Inter Display SemiBold" } as const;

@@ -11,7 +11,7 @@ export async function loader({ request, context }: Route.LoaderArgs) {
 }
 
 const tab = ({ isActive }: { isActive: boolean }) =>
-  `rounded-lg px-3 py-1.5 text-sm font-medium ${isActive ? "bg-surface-2 text-text" : "text-text-muted hover:text-text"}`;
+  `rounded px-3 py-1.5 text-sm font-medium ${isActive ? "bg-surface-2 text-text" : "text-text-muted hover:text-text"}`;
 
 export default function Editor() {
   return (

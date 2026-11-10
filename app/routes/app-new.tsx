@@ -47,7 +47,7 @@ export default function NewPage({ loaderData, actionData }: Route.ComponentProps
       <Form method="post" className="flex flex-col gap-4">
         <label className="flex flex-col gap-1.5">
           <span className="text-sm font-medium">Address</span>
-          <span className="flex items-center rounded-[0.6rem] border border-border-strong bg-surface focus-within:outline-2 focus-within:outline-accent">
+          <span className="flex items-center rounded border border-border-strong bg-surface focus-within:outline-2 focus-within:outline-accent">
             <span className="pl-3 text-text-muted">{loaderData.host}/</span>
             <input
               name="handle"
@@ -68,7 +68,7 @@ export default function NewPage({ loaderData, actionData }: Route.ComponentProps
           <input name="title" defaultValue={loaderData.title} required maxLength={100} className="field" />
         </label>
         {actionData?.error ? (
-          <p role="alert" className="rounded-xl bg-danger-soft px-4 py-3 text-sm text-danger">
+          <p role="alert" className="rounded bg-danger-soft px-4 py-3 text-sm text-danger">
             {actionData.error}
           </p>
         ) : null}

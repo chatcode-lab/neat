@@ -84,23 +84,23 @@ export default function Settings({ loaderData, actionData }: Route.ComponentProp
     <main className="mx-auto flex w-full max-w-column flex-col gap-8">
       <h1 className="text-2xl font-semibold">Settings</h1>
       {result?.error ? (
-        <p role="alert" className="rounded-xl bg-danger-soft px-4 py-3 text-sm text-danger">
+        <p role="alert" className="rounded bg-danger-soft px-4 py-3 text-sm text-danger">
           {result.error}
         </p>
       ) : null}
       {result?.message || loaderData.linked === "google" ? (
-        <p role="status" className="rounded-xl bg-accent-soft px-4 py-3 text-sm">
+        <p role="status" className="rounded bg-accent-soft px-4 py-3 text-sm">
           {result?.message ?? "Google linked."}
         </p>
       ) : null}
 
       <section className="flex flex-col gap-3">
         <h2 className="text-lg font-semibold">Account</h2>
-        <div className="rounded-2xl border border-border bg-surface px-4 py-3">
+        <div className="rounded-md border border-border bg-surface px-4 py-3">
           <p className="font-medium">{account.name}</p>
           <p className="text-sm text-text-muted">{account.email ?? "No email: link Google to add one."}</p>
         </div>
-        <div className="flex flex-col divide-y divide-border rounded-2xl border border-border bg-surface">
+        <div className="flex flex-col divide-y divide-border rounded-md border border-border bg-surface">
           <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
             <div>
               <p className="font-medium">Google</p>
@@ -158,16 +158,16 @@ export default function Settings({ loaderData, actionData }: Route.ComponentProp
         <h2 className="text-lg font-semibold">Agents and API</h2>
         <p className="text-text-muted">
           Connect Claude, ChatGPT or another MCP client to <code className="rounded bg-surface-2 px-1">{loaderData.origin}/mcp</code>, or use the{" "}
-          <a className="text-accent underline" href="/api/v1">
+          <a className="text-link" href="/api/v1">
             HTTP API
           </a>{" "}
-          with a token. <a className="text-accent underline" href="/agents">How to connect</a>.
+          with a token. <a className="text-link" href="/agents">How to connect</a>.
         </p>
 
         {loaderData.apps.length > 0 ? (
           <div className="flex flex-col gap-2">
             <h3 className="font-medium">Connected apps</h3>
-            <ul className="flex flex-col divide-y divide-border rounded-2xl border border-border bg-surface">
+            <ul className="flex flex-col divide-y divide-border rounded-md border border-border bg-surface">
               {loaderData.apps.map((app) => (
                 <TokenRow key={app.id} id={app.id} label={app.label ?? "An app"} created={date(app.createdAt)} used={date(app.lastUsedAt)} busy={busy} />
               ))}
@@ -178,10 +178,10 @@ export default function Settings({ loaderData, actionData }: Route.ComponentProp
         <div className="flex flex-col gap-2">
           <h3 className="font-medium">API tokens</h3>
           {result?.token ? (
-            <div className="flex flex-col gap-2 rounded-2xl border border-accent bg-accent-soft px-4 py-3">
+            <div className="flex flex-col gap-2 rounded-md border border-accent bg-accent-soft px-4 py-3">
               <p className="text-sm">Copy your token now: it is shown only once.</p>
               <div className="flex gap-2">
-                <code className="min-w-0 flex-1 truncate rounded-lg bg-surface px-3 py-2 text-sm">{result.token}</code>
+                <code className="min-w-0 flex-1 truncate rounded bg-surface px-3 py-2 text-sm">{result.token}</code>
                 <button
                   type="button"
                   className="btn"
@@ -195,7 +195,7 @@ export default function Settings({ loaderData, actionData }: Route.ComponentProp
             </div>
           ) : null}
           {loaderData.tokens.length > 0 ? (
-            <ul className="flex flex-col divide-y divide-border rounded-2xl border border-border bg-surface">
+            <ul className="flex flex-col divide-y divide-border rounded-md border border-border bg-surface">
               {loaderData.tokens.map((token) => (
                 <TokenRow key={token.id} id={token.id} label={token.label ?? "Token"} created={date(token.createdAt)} used={date(token.lastUsedAt)} busy={busy} />
               ))}
