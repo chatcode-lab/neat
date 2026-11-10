@@ -3,6 +3,7 @@ import { createRequestHandler, RouterContextProvider } from "react-router";
 
 import { nonceContext, viewerContext, waitUntilContext } from "../app/context";
 import { sweepTelegramTokens } from "../app/lib/db/telegram-tokens.server";
+import { mediaUrl } from "../app/lib/media.server";
 import { sweepOAuth } from "../app/lib/oauth/clients.server";
 import { authorizationServerMetadata, protectedResourceMetadata } from "../app/lib/oauth/metadata";
 import { bodyLimit, capRequestBody, tooLarge } from "../app/lib/security/body";
@@ -133,6 +134,13 @@ async function serve(request: Request, ctx: ExecutionContext): Promise<Response>
   if (request.method === "GET" || request.method === "HEAD") {
     const document = discovery(url.pathname, url.origin);
     if (document) return secure(document);
+    // Addresses the legacy site published, still in old shares and link
+    // previews: a page's cover, and the pictures, now kept under legacy/.
+    const legacy = /^\/(?:([a-z0-9_]{1,40})\/cover\.jpg|_usercontent\/([A-Za-z0-9_.-]{1,100}))$/.exec(url.pathname);
+    if (legacy) {
+      const to = legacy[1] ? `/og/${legacy[1]}.png` : mediaUrl(`legacy/${legacy[2]}`, url.origin);
+      return secure(new Response(null, { status: 301, headers: { Location: to, "Cache-Control": "public, max-age=86400" } }));
+    }
     if (url.pathname === "/robots.txt") return secure(text(robotsTxt(url.origin, options.indexable), "text/plain"));
     if (url.pathname === "/llms.txt") return secure(text(llmsTxt(url.origin, env.TELEGRAM_BOT_USERNAME), "text/plain"));
     if (url.pathname === "/sitemap.xml") {

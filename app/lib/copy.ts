@@ -62,10 +62,13 @@ publish.
 `;
 }
 
+/** The company that runs neat.link, as the terms and the privacy notice name it. */
+export const OPERATOR = "Holy Traction OÜ, Sepapaja 6, 15551 Tallinn, Estonia";
+
 export function termsMarkdown(origin: string): string {
   return `# Terms of use
 
-neat.link is provided as is, without warranty. By making a page you confirm
+neat.link is operated by ${OPERATOR}. It is provided as is, without warranty. By making a page you confirm
 that you have the right to publish what is on it and that it breaks no law.
 
 Pages that impersonate someone, deceive visitors, collect credentials,
@@ -95,5 +98,7 @@ neat.link keeps what is needed to run your page and nothing more.
 
 Delete a page in the [editor](${origin}/app). To delete your account, write to
 privacy@neat.link.
+
+The controller of this data is ${OPERATOR}.
 `;
 }
