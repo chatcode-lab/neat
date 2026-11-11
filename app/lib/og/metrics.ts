@@ -10,6 +10,11 @@ export interface FontMetrics {
   advance(codePoint: number): number | null;
 }
 
+/** A font's metrics, and another's for the characters it lacks, as resvg falls back to the other font to draw them. */
+export function withFallback(font: FontMetrics, fallback: FontMetrics): FontMetrics {
+  return { advance: (codePoint) => font.advance(codePoint) ?? fallback.advance(codePoint) };
+}
+
 export function readFontMetrics(buffer: ArrayBuffer): FontMetrics {
   const view = new DataView(buffer);
   const tables = new Map<string, number>();

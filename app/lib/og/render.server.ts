@@ -4,10 +4,13 @@ import resvgWasm from "@resvg/resvg-wasm/index_bg.wasm";
 // Binary modules must end in .bin to be bundled as data (see the Cloudflare
 // Vite plugin's module rules). Inter is under the SIL Open Font License,
 // beside them in OFL.txt; these are subset to Latin, Greek, and Cyrillic.
+// The sign ⎆ comes from Noto Sans Symbols at weight 600, subset to that one
+// character, also under the OFL (NotoSansSymbols-OFL.txt).
 import regularFont from "./fonts/Inter-Regular.ttf.bin";
 import semiboldFont from "./fonts/InterDisplay-SemiBold.ttf.bin";
+import signFont from "./fonts/NotoSansSymbols-Sign.ttf.bin";
 import { type Cover, coverSvg, FAMILY, type Fonts } from "./cover";
-import { readFontMetrics } from "./metrics";
+import { readFontMetrics, withFallback } from "./metrics";
 
 // resvg is started once per isolate, on the first cover it draws, so no
 // other request pays for it.
@@ -23,7 +26,10 @@ function start(): Promise<void> {
 }
 
 function metrics(): Fonts {
-  fonts ??= { regular: readFontMetrics(regularFont), semibold: readFontMetrics(semiboldFont) };
+  if (!fonts) {
+    const sign = readFontMetrics(signFont);
+    fonts = { regular: withFallback(readFontMetrics(regularFont), sign), semibold: withFallback(readFontMetrics(semiboldFont), sign) };
+  }
   return fonts;
 }
 
@@ -33,7 +39,7 @@ export async function renderCover(cover: Cover): Promise<Uint8Array> {
   const svg = coverSvg(cover, metrics());
   const resvg = new Resvg(svg, {
     font: {
-      fontBuffers: [new Uint8Array(regularFont), new Uint8Array(semiboldFont)],
+      fontBuffers: [new Uint8Array(regularFont), new Uint8Array(semiboldFont), new Uint8Array(signFont)],
       loadSystemFonts: false,
       defaultFontFamily: FAMILY.regular,
     },

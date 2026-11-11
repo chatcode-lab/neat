@@ -31,7 +31,7 @@ export async function coverResponse(url: URL, cached: Cached): Promise<Response 
   let make: () => Promise<Cover>;
   if (name === "site") {
     version = COVER_DESIGN;
-    make = async () => ({ title: "neat.link", headline: TAGLINE, text: "", address: host, picture: null });
+    make = async () => ({ title: "neat.link", headline: TAGLINE, text: "", address: host, picture: null, sign: true });
   } else {
     if (!HANDLE_PATTERN.test(name)) return null;
     const site = await siteByHandle(env.DB, name);

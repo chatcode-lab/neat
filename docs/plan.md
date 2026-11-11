@@ -171,6 +171,16 @@ scheme. The editor has a System/Light/Dark switch stored in a cookie and
 applied by CSS before scripts run (aionly's approach, no flash). Site themes
 and backgrounds come later as a paid feature; `sites.theme` exists for them.
 
+Covers read as business cards: the round picture with the page's white
+edge and shadow (initials, or the sign for the site, on a dark disc when
+there is none) beside the name, the headline, up to three lines of the
+text and the address after the ⎆ sign. The name is set as large as it
+fits, on one line while it can be large, and the card is centred both
+ways, so a page with a name alone fills the cover as well as a long one.
+Letters styled with Unicode's mathematical alphabets are drawn plain, and
+lines left with nothing to read once emoji are dropped are left out. The
+sign comes from Noto Sans Symbols, subset to that one character.
+
 ## Security baseline (from aionly)
 
 CSP with a per-response nonce; frames denied except the editor, which
