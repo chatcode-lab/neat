@@ -8,11 +8,20 @@
 export interface FontMetrics {
   /** The advance of a character in ems, or null when the font lacks it. */
   advance(codePoint: number): number | null;
+  /**
+   * The space before a character's ink in ems (its left side bearing), or
+   * null when the font lacks it: lines that start at one x start their ink
+   * this much apart, more so the larger the type.
+   */
+  leftBearing(codePoint: number): number | null;
 }
 
 /** A font's metrics, and another's for the characters it lacks, as resvg falls back to the other font to draw them. */
 export function withFallback(font: FontMetrics, fallback: FontMetrics): FontMetrics {
-  return { advance: (codePoint) => font.advance(codePoint) ?? fallback.advance(codePoint) };
+  return {
+    advance: (codePoint) => font.advance(codePoint) ?? fallback.advance(codePoint),
+    leftBearing: (codePoint) => (font.advance(codePoint) === null ? fallback.leftBearing(codePoint) : font.leftBearing(codePoint)),
+  };
 }
 
 export function readFontMetrics(buffer: ArrayBuffer): FontMetrics {
@@ -39,6 +48,9 @@ export function readFontMetrics(buffer: ArrayBuffer): FontMetrics {
   const longMetrics = view.getUint16(table("hhea") + 34);
   const hmtx = table("hmtx");
   const advanceOf = (glyph: number) => view.getUint16(hmtx + Math.min(glyph, longMetrics - 1) * 4);
+  // Glyphs past the long metrics keep only their bearing, in an array after them.
+  const bearingOf = (glyph: number) =>
+    view.getInt16(glyph < longMetrics ? hmtx + glyph * 4 + 2 : hmtx + longMetrics * 4 + (glyph - longMetrics) * 2);
   const glyphOf = characterMap(view, table("cmap"));
   const cache = new Map<number, number | null>();
 
@@ -51,6 +63,10 @@ export function readFontMetrics(buffer: ArrayBuffer): FontMetrics {
         cache.set(codePoint, width);
       }
       return width;
+    },
+    leftBearing(codePoint) {
+      const glyph = glyphOf(codePoint);
+      return glyph === 0 ? null : bearingOf(glyph) / unitsPerEm;
     },
   };
 }

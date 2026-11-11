@@ -81,14 +81,18 @@ describe("cover layout", () => {
     }
   });
 
-  it("hangs the sign before the address, which starts where the other lines do", () => {
-    const drawn = texts(coverSvg(profiles[1]!, fonts));
-    const at = drawn.findIndex((text) => text.content === "neat.link/ada");
-    const [signText, address, title] = [drawn[at - 1]!, drawn[at]!, drawn[1]!];
-    expect(signText.content).toBe(SIGN);
-    expect(address.x).toBe(title.x);
-    // Its ink ends before the address begins.
-    expect(signText.x + 0.551 * signText.size).toBeLessThan(address.x);
+  it("starts every line's ink at one edge, with the sign hung before the address", () => {
+    for (const cover of profiles) {
+      const drawn = texts(coverSvg(cover, fonts));
+      // The text column: everything right of the picture but the sign.
+      const column = drawn.filter((text) => text.x > 400 && text.content !== SIGN);
+      const metrics = (text: (typeof drawn)[number]) => (text.family === "Inter" ? fonts.regular : fonts.semibold);
+      const ink = column.map((text) => text.x + (metrics(text).leftBearing(text.content.codePointAt(0)!) ?? 0) * text.size);
+      for (const start of ink) expect(start).toBeCloseTo(ink[0]!, 0);
+      const sign = drawn.find((text) => text.content === SIGN && text.x > 400)!;
+      // Its ink ends before the address begins.
+      expect(sign.x + 0.551 * sign.size).toBeLessThan(ink[0]!);
+    }
   });
 
   it("leads the address with the sign and leaves out lines with nothing to read", () => {

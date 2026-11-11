@@ -10,7 +10,7 @@ import type { FontMetrics } from "./metrics";
  */
 
 /** Bumped when the cover's design changes, so every cover's address changes and caches draw it again. */
-export const COVER_DESIGN = "5";
+export const COVER_DESIGN = "6";
 
 export const WIDTH = 1200;
 export const HEIGHT = 630;
@@ -234,7 +234,10 @@ const SIGN_SIZE = CAP / SIGN_INK.height;
 /** Metrics that measure the sign at the size it is drawn. */
 function signSized(font: FontMetrics): FontMetrics {
   const code = SIGN.codePointAt(0)!;
-  return { advance: (point) => (point === code ? (font.advance(point) ?? 0.6) * SIGN_SIZE : font.advance(point)) };
+  return {
+    advance: (point) => (point === code ? (font.advance(point) ?? 0.6) * SIGN_SIZE : font.advance(point)),
+    leftBearing: (point) => (point === code ? (font.leftBearing(point) ?? 0) * SIGN_SIZE : font.leftBearing(point)),
+  };
 }
 
 /** A line as SVG text, its signs set in their own font at the capitals' height. */
@@ -361,8 +364,10 @@ export function coverSvg(cover: Cover, given: Fonts): string {
           `<text x="${x.toFixed(1)}" y="${y.toFixed(1)}" font-family="${stack(FAMILY.symbols)}" font-size="${size.toFixed(1)}" fill="${run.color}">${SIGN}</text>`,
         );
       }
+      // Every line's ink starts at textX, however large its first letter's side bearing.
+      const x = textX - (fonts[run.weight].leftBearing(line.codePointAt(0) ?? 32) ?? 0) * run.size;
       parts.push(
-        `<text x="${textX}" y="${y.toFixed(1)}" font-family="${stack(FAMILY[run.weight])}" font-size="${run.size}" fill="${run.color}">${markup(line, run.size)}</text>`,
+        `<text x="${x.toFixed(1)}" y="${y.toFixed(1)}" font-family="${stack(FAMILY[run.weight])}" font-size="${run.size}" fill="${run.color}">${markup(line, run.size)}</text>`,
       );
     });
     baseline += (run.lines.length - 1) * run.lineHeight;
