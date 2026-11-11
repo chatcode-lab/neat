@@ -179,7 +179,11 @@ fits, on one line while it can be large, and the card is centred both
 ways, so a page with a name alone fills the cover as well as a long one.
 Letters styled with Unicode's mathematical alphabets are drawn plain, and
 lines left with nothing to read once emoji are dropped are left out. The
-sign comes from Noto Sans Symbols, subset to that one character.
+sign comes from JuliaMono SemiBold, subset to that one character and
+renamed Neat Sign as its licence asks; it is as tall as the capitals and
+hangs in the margin, so the address lines up with the text. Text is never
+cut short on a cover: a paragraph that does not fit keeps its first whole
+sentences, or is left out with what follows it.
 
 ## Security baseline (from aionly)
 

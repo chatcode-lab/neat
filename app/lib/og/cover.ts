@@ -10,13 +10,20 @@ import type { FontMetrics } from "./metrics";
  */
 
 /** Bumped when the cover's design changes, so every cover's address changes and caches draw it again. */
-export const COVER_DESIGN = "4";
+export const COVER_DESIGN = "5";
 
 export const WIDTH = 1200;
 export const HEIGHT = 630;
 
-/** The neat.link sign. Inter lacks it; resvg draws it from the Noto Sans Symbols subset beside the fonts. */
+/** The neat.link sign. Inter lacks it; resvg draws it from the Neat Sign font beside the fonts. */
 export const SIGN = "⎆";
+
+/**
+ * The sign's ink in Neat Sign (JuliaMono SemiBold's ⎆, renamed as its
+ * licence asks of a subset), in ems: it stands on the baseline, this tall,
+ * and spans from `left` to `right`.
+ */
+const SIGN_INK = { height: 0.516, left: 0.044, right: 0.551 } as const;
 
 const COLORS = {
   ground: "#fafafa",
@@ -28,7 +35,7 @@ const COLORS = {
   onDisc: "#fafafa",
 } as const;
 
-export const FAMILY = { regular: "Inter", semibold: "Inter Display SemiBold", symbols: "Noto Sans Symbols" } as const;
+export const FAMILY = { regular: "Inter", semibold: "Inter Display SemiBold", symbols: "Neat Sign" } as const;
 
 /** Fonts that measure the sign as well as their own characters, as resvg draws it. */
 export interface Fonts {
@@ -91,9 +98,11 @@ function ellipsize(line: string, font: FontMetrics, size: number, width: number)
 }
 
 /**
- * Breaks text into at most `maxLines` lines that fit `width`: at spaces,
- * after hyphens, dashes, slashes, underscores and dots (as in handles and
- * addresses), or inside a word too long for a line (`cut`). Text left over ends the last line with an ellipsis.
+ * Breaks text into at most `maxLines` lines that fit `width`, at spaces. A
+ * word wider than a line breaks after a hyphen, dash, slash, underscore or
+ * dot, as handles and addresses can, or else between letters where it
+ * stops fitting (`cut`); `broken` counts the words broken either way. Text
+ * left over ends the last line with an ellipsis.
  */
 export function wrap(
   text: string,
@@ -101,20 +110,17 @@ export function wrap(
   size: number,
   width: number,
   maxLines: number,
-): { lines: string[]; complete: boolean; cut: boolean } {
+): { lines: string[]; complete: boolean; broken: number; cut: boolean } {
   const fits = (line: string) => measure(line, font, size) <= width;
-  // Pieces of words, each with whether a space comes before it.
-  const pieces = text
-    .split(" ")
-    .filter(Boolean)
-    .flatMap((word) => word.split(/(?<=[-–—/_.])(?=.)/).map((piece, index) => ({ piece, spaced: index === 0 })));
+  const words = text.split(" ").filter(Boolean);
   const lines: string[] = [];
   let line = "";
   let index = 0;
+  let broken = 0;
   let cut = false;
-  while (index < pieces.length && lines.length < maxLines) {
-    const { piece, spaced } = pieces[index]!;
-    const candidate = line ? `${line}${spaced ? " " : ""}${piece}` : piece;
+  while (index < words.length && lines.length < maxLines) {
+    const word = words[index]!;
+    const candidate = line ? `${line} ${word}` : word;
     if (fits(candidate)) {
       line = candidate;
       index += 1;
@@ -125,24 +131,33 @@ export function wrap(
       line = "";
       continue;
     }
-    // A piece wider than a whole line is cut where it stops fitting.
-    let end = 1;
-    const chars = [...piece];
-    while (end < chars.length && fits(chars.slice(0, end + 1).join(""))) end += 1;
-    lines.push(chars.slice(0, end).join(""));
-    pieces[index] = { piece: chars.slice(end).join(""), spaced: false };
-    cut = true;
+    const pieces = word.split(/(?<=[-–—/_.])(?=.)/);
+    let head = "";
+    for (const piece of pieces) {
+      if (!fits(head + piece)) break;
+      head += piece;
+    }
+    if (!head) {
+      const chars = [...word];
+      let end = 1;
+      while (end < chars.length && fits(chars.slice(0, end + 1).join(""))) end += 1;
+      head = chars.slice(0, end).join("");
+      cut = true;
+    }
+    lines.push(head);
+    words[index] = word.slice(head.length);
+    broken += 1;
   }
   if (line && lines.length < maxLines) lines.push(line);
-  const complete = index >= pieces.length;
+  const complete = index >= words.length;
   if (!complete && lines.length > 0) lines[lines.length - 1] = ellipsize(lines[lines.length - 1]!, font, size, width);
-  return { lines, complete, cut };
+  return { lines, complete, broken, cut };
 }
 
 /**
- * Text wrapped as `wrap` does, then into the narrowest width that keeps as
- * many whole lines, so a name on two lines breaks evenly rather than
- * leaving one word below.
+ * Text wrapped as `wrap` does, then into the narrowest width that keeps
+ * as many lines and breaks no more words, so a name on two lines breaks
+ * evenly rather than leaving one word below.
  */
 export function balance(text: string, font: FontMetrics, size: number, width: number, maxLines: number): ReturnType<typeof wrap> {
   const wrapped = wrap(text, font, size, width, maxLines);
@@ -152,10 +167,24 @@ export function balance(text: string, font: FontMetrics, size: number, width: nu
   while (high - low > 1) {
     const middle = (low + high) / 2;
     const narrower = wrap(text, font, size, middle, maxLines);
-    if (narrower.complete && !narrower.cut && narrower.lines.length === wrapped.lines.length) high = middle;
+    if (narrower.complete && !narrower.cut && narrower.broken <= wrapped.broken && narrower.lines.length === wrapped.lines.length) high = middle;
     else low = middle;
   }
   return wrap(text, font, size, high, maxLines);
+}
+
+/**
+ * Text in at most `maxLines` balanced lines without cutting it short: all
+ * of it, as many of its first sentences as fit, or nothing. `all` says
+ * whether it is all there.
+ */
+export function whole(text: string, font: FontMetrics, size: number, width: number, maxLines: number): { lines: string[]; all: boolean } {
+  const sentences = text.split(/(?<=[.!?…])\s+/);
+  for (let count = sentences.length; count > 0; count -= 1) {
+    const wrapped = balance(sentences.slice(0, count).join(" "), font, size, width, maxLines);
+    if (wrapped.complete && !wrapped.cut) return { lines: wrapped.lines, all: count === sentences.length };
+  }
+  return { lines: [], all: false };
 }
 
 /** Up to two letters for a page without a picture. */
@@ -178,12 +207,14 @@ const STEPS = [
   { title: 72, titleLines: 2, headline: 36, text: 32, address: 34 },
   { title: 62, titleLines: 2, headline: 34, text: 32, address: 32 },
   { title: 54, titleLines: 3, headline: 32, text: 30, address: 30 },
+  { title: 46, titleLines: 3, headline: 32, text: 30, address: 30 },
+  { title: 40, titleLines: 4, headline: 30, text: 28, address: 28 },
 ] as const;
 
 /** The picture's diameter, the space between it and the text, and the least margin around the card. */
 const SIDE = 400;
-const GAP = 64;
-const MARGIN_X = 64;
+const GAP = 72;
+const MARGIN_X = 56;
 const MARGIN_Y = 64;
 const TEXT_WIDTH = WIDTH - 2 * MARGIN_X - SIDE - GAP;
 
@@ -194,13 +225,29 @@ const CAP = 0.73;
 const TEXT_LINES = 3;
 const SECONDARY_LINES = 4;
 
-/** The sign before the address, a little larger than its letters so it reads in a small preview. */
-const SIGN_SCALE = 1.2;
+/** The space between the sign and the address, in ems of the address. */
+const SIGN_SPACE = 0.3;
+
+/** The sign is drawn as tall as the capitals around it: its font is this many times their size. */
+const SIGN_SIZE = CAP / SIGN_INK.height;
+
+/** Metrics that measure the sign at the size it is drawn. */
+function signSized(font: FontMetrics): FontMetrics {
+  const code = SIGN.codePointAt(0)!;
+  return { advance: (point) => (point === code ? (font.advance(point) ?? 0.6) * SIGN_SIZE : font.advance(point)) };
+}
+
+/** A line as SVG text, its signs set in their own font at the capitals' height. */
+const markup = (line: string, size: number) =>
+  line
+    .split(SIGN)
+    .map(escape)
+    .join(`<tspan font-family="'${FAMILY.symbols}'" font-size="${(size * SIGN_SIZE).toFixed(1)}">${SIGN}</tspan>`);
 
 /** Lines of one kind: the first baseline sits `gap` below the previous run's baseline plus this run's capital height. */
 interface Run {
   lines: string[];
-  /** The sign leads the line. */
+  /** The sign hangs before the line, in the margin, so the line starts where the others do. */
   signed?: boolean;
   size: number;
   lineHeight: number;
@@ -234,74 +281,68 @@ const runHeight = (run: Run) => run.gap + run.size * CAP + (run.lines.length - 1
 /** A family with the symbols font behind it, for the sign. */
 const stack = (family: string) => `'${family}', '${FAMILY.symbols}'`;
 
-export function coverSvg(cover: Cover, fonts: Fonts): string {
+export function coverSvg(cover: Cover, given: Fonts): string {
+  const fonts: Fonts = { regular: signSized(given.regular), semibold: signSized(given.semibold) };
   // The name, or the page's handle when nothing of it can be drawn.
   const named = drawable(cover.title, fonts.semibold);
   const title = READABLE.test(named) ? named : drawable(cover.address.split("/").pop() ?? cover.address, fonts.semibold);
 
-  let step: (typeof STEPS)[number] = STEPS[STEPS.length - 1]!;
-  let titleLines: string[] = [];
-  for (const candidate of STEPS) {
-    const wrapped = balance(title, fonts.semibold, candidate.title, TEXT_WIDTH, candidate.titleLines);
-    // A name cut inside a word tries a smaller size first.
-    if ((wrapped.complete && !wrapped.cut) || candidate === step) {
-      step = candidate;
-      titleLines = wrapped.lines;
-      break;
-    }
-  }
+  // The largest size the name fits whole at, its words unbroken; failing
+  // that, broken only after a hyphen, underscore and the like; failing
+  // that, the smallest.
+  const fitted = STEPS.map((step) => ({ step, wrapped: balance(title, fonts.semibold, step.title, TEXT_WIDTH, step.titleLines) }));
+  const { step, wrapped: titled } =
+    fitted.find(({ wrapped }) => wrapped.complete && wrapped.broken === 0) ??
+    fitted.find(({ wrapped }) => wrapped.complete && !wrapped.cut) ??
+    fitted[fitted.length - 1]!;
+  const titleLines = titled.lines;
 
+  // The headline and the text show whole lines only: a paragraph too long
+  // for the room keeps its first sentences, or is left out with all that
+  // follows it, so nothing ends cut short.
   const headlineText = drawable(cover.headline, fonts.regular);
-  const headline = READABLE.test(headlineText) ? wrap(headlineText, fonts.regular, step.headline, TEXT_WIDTH, 2).lines : [];
+  const headline = READABLE.test(headlineText) ? whole(headlineText, fonts.regular, step.headline, TEXT_WIDTH, 2).lines : [];
 
   const paragraphs = cover.text
     .split("\n")
     .map((line) => drawable(line, fonts.regular))
     .filter((line) => READABLE.test(line));
   const room = Math.min(TEXT_LINES, SECONDARY_LINES - headline.length);
-  const text: string[] = [];
-  let shown = 0;
+  const shown: string[][] = [];
   for (const paragraph of paragraphs) {
-    if (text.length >= room) break;
-    const wrapped = wrap(paragraph, fonts.regular, step.text, TEXT_WIDTH, room - text.length);
-    text.push(...wrapped.lines);
-    if (wrapped.complete) shown += 1;
-    else break;
+    const left = room - shown.flat().length;
+    if (left <= 0) break;
+    const kept = whole(paragraph, fonts.regular, step.text, TEXT_WIDTH, left);
+    if (kept.lines.length) shown.push(kept.lines);
+    if (!kept.all) break;
   }
-  const cut = () => {
-    const last = text[text.length - 1];
-    if (last !== undefined && !last.endsWith("…")) text[text.length - 1] = ellipsize(last, fonts.regular, step.text, TEXT_WIDTH);
-  };
-  if (shown < paragraphs.length) cut();
 
-  // The address, after the sign, fills the line at most, however long the handle.
-  const signWidth = (size: number) => measure(SIGN, fonts.semibold, size * SIGN_SCALE) + measure(" ", fonts.semibold, size);
+  // The address fills the line at most, however long the handle.
   const address = drawable(cover.address, fonts.semibold);
   let addressSize: number = step.address;
-  while (addressSize > 20 && signWidth(addressSize) + measure(address, fonts.semibold, addressSize) > TEXT_WIDTH) addressSize -= 1;
+  while (addressSize > 20 && measure(address, fonts.semibold, addressSize) > TEXT_WIDTH) addressSize -= 1;
 
   const runs = (): Run[] => [
     { lines: titleLines, size: step.title, lineHeight: Math.round(step.title * 1.06), gap: 0, weight: "semibold", color: COLORS.text },
     ...(headline.length
       ? [{ lines: headline, size: step.headline, lineHeight: Math.round(step.headline * 1.3), gap: Math.round(Math.max(step.title * 0.36, step.headline * 0.9)), weight: "regular" as const, color: COLORS.headline }]
       : []),
-    ...(text.length
-      ? [{ lines: text, size: step.text, lineHeight: Math.round(step.text * 1.42), gap: Math.round(headline.length ? step.text * 0.75 : Math.max(step.title * 0.42, step.text)), weight: "regular" as const, color: COLORS.body }]
+    ...(shown.length
+      ? [{ lines: shown.flat(), size: step.text, lineHeight: Math.round(step.text * 1.42), gap: Math.round(headline.length ? step.text * 0.75 : Math.max(step.title * 0.42, step.text)), weight: "regular" as const, color: COLORS.body }]
       : []),
     { lines: [address], signed: true, size: addressSize, lineHeight: addressSize, gap: Math.round(addressSize * 1.25), weight: "semibold", color: COLORS.text },
   ];
   let laid = runs();
   let height = laid.reduce((sum, run) => sum + runHeight(run), 0);
-  while (height > HEIGHT - 2 * MARGIN_Y && text.length > 0) {
-    text.pop();
-    cut();
+  while (height > HEIGHT - 2 * MARGIN_Y && shown.length > 0) {
+    shown.pop();
     laid = runs();
     height = laid.reduce((sum, run) => sum + runHeight(run), 0);
   }
 
   // The picture and the text are centred together; the widest line sets the text's width.
   const textWidth = Math.max(
-    ...laid.flatMap((run) => run.lines.map((line) => (run.signed ? signWidth(run.size) : 0) + measure(line, fonts[run.weight], run.size))),
+    ...laid.flatMap((run) => run.lines.map((line) => measure(line, fonts[run.weight], run.size))),
   );
   const left = Math.max(MARGIN_X, Math.round((WIDTH - (SIDE + GAP + Math.min(textWidth, TEXT_WIDTH))) / 2));
   const textX = left + SIDE + GAP;
@@ -312,16 +353,16 @@ export function coverSvg(cover: Cover, fonts: Fonts): string {
     baseline += run.gap + run.size * CAP;
     run.lines.forEach((line, index) => {
       const y = baseline + index * run.lineHeight;
-      let x = textX;
       if (run.signed) {
-        // Lowered so the larger sign stays centred on the capitals.
+        // As tall as the capitals, on the same baseline, ending a space before the line.
+        const size = run.size * SIGN_SIZE;
+        const x = textX - run.size * SIGN_SPACE - SIGN_INK.right * size;
         parts.push(
-          `<text x="${x}" y="${(y + run.size * 0.06).toFixed(1)}" font-family="${stack(FAMILY.symbols)}" font-size="${(run.size * SIGN_SCALE).toFixed(1)}" fill="${run.color}">${SIGN}</text>`,
+          `<text x="${x.toFixed(1)}" y="${y.toFixed(1)}" font-family="${stack(FAMILY.symbols)}" font-size="${size.toFixed(1)}" fill="${run.color}">${SIGN}</text>`,
         );
-        x += signWidth(run.size);
       }
       parts.push(
-        `<text x="${x.toFixed(1)}" y="${y.toFixed(1)}" font-family="${stack(FAMILY[run.weight])}" font-size="${run.size}" fill="${run.color}">${escape(line)}</text>`,
+        `<text x="${textX}" y="${y.toFixed(1)}" font-family="${stack(FAMILY[run.weight])}" font-size="${run.size}" fill="${run.color}">${markup(line, run.size)}</text>`,
       );
     });
     baseline += (run.lines.length - 1) * run.lineHeight;
@@ -339,11 +380,12 @@ export function coverSvg(cover: Cover, fonts: Fonts): string {
       `<clipPath id="round"><circle cx="${cx}" cy="${cy}" r="${r}"/></clipPath>` +
       `<image x="${left}" y="${cy - r}" width="${SIDE}" height="${SIDE}" preserveAspectRatio="xMidYMid slice" clip-path="url(#round)" href="${cover.picture}"/>`;
   } else if (!letters) {
-    // The sign's outline is centred on its advance, a third of an em above the baseline.
-    const size = Math.round(SIDE * 0.46);
+    // The sign's ink, a third of the disc tall, centred in it.
+    const size = (SIDE * 0.34) / SIGN_INK.height;
+    const x = cx - ((SIGN_INK.left + SIGN_INK.right) / 2) * size;
     face =
       `<circle cx="${cx}" cy="${cy}" r="${r}" fill="${COLORS.disc}"/>` +
-      `<text x="${cx}" y="${(cy + size * 0.356).toFixed(1)}" text-anchor="middle" font-family="${stack(FAMILY.symbols)}" font-size="${size}" fill="${COLORS.onDisc}">${SIGN}</text>`;
+      `<text x="${x.toFixed(1)}" y="${(cy + (SIGN_INK.height / 2) * size).toFixed(1)}" font-family="${stack(FAMILY.symbols)}" font-size="${size.toFixed(1)}" fill="${COLORS.onDisc}">${SIGN}</text>`;
   } else {
     const size = Math.round(SIDE * (letters.length > 1 ? 0.36 : 0.42));
     face =

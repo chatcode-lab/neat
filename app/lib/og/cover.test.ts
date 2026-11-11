@@ -2,14 +2,14 @@ import { readFileSync } from "node:fs";
 
 import { describe, expect, it } from "vitest";
 
-import { balance, type Cover, coverSvg, drawable, HEIGHT, measure, SIGN, WIDTH, wrap } from "./cover";
+import { balance, type Cover, coverSvg, drawable, FAMILY, HEIGHT, measure, SIGN, whole, WIDTH, wrap } from "./cover";
 import { readFontMetrics, withFallback } from "./metrics";
 
 const font = (name: string) => {
   const bytes = readFileSync(new URL(`./fonts/${name}`, import.meta.url));
   return readFontMetrics(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer);
 };
-const sign = font("NotoSansSymbols-Sign.ttf.bin");
+const sign = font("NeatSign.ttf.bin");
 const fonts = {
   regular: withFallback(font("Inter-Regular.ttf.bin"), sign),
   semibold: withFallback(font("InterDisplay-SemiBold.ttf.bin"), sign),
@@ -17,8 +17,8 @@ const fonts = {
 
 /** Every text the cover draws, with where it starts and its size. */
 function texts(svg: string) {
-  return [...svg.matchAll(/<text x="([\d.]+)" y="([\d.]+)"(?: text-anchor="middle")? font-family="'([^']+)'[^"]*" font-size="([\d.]+)"[^>]*>([^<]*)<\/text>/g)].map(
-    ([, x, y, family, size, content]) => ({ x: Number(x), y: Number(y), family: family!, size: Number(size), content: content! }),
+  return [...svg.matchAll(/<text x="([\d.]+)" y="([\d.]+)"(?: text-anchor="middle")? font-family="'([^']+)'[^"]*" font-size="([\d.]+)"[^>]*>(.*?)<\/text>/g)].map(
+    ([, x, y, family, size, content]) => ({ x: Number(x), y: Number(y), family: family!, size: Number(size), content: content!.replace(/<[^>]+>/g, "") }),
   );
 }
 
@@ -30,10 +30,20 @@ describe("cover text", () => {
     expect(drawable(`Creator of ${SIGN} neat.link 🙌🏻`, fonts.regular)).toBe(`Creator of ${SIGN} neat.link`);
   });
 
-  it("breaks after a hyphen before cutting a word", () => {
+  it("breaks a word after a hyphen only when it is wider than a line", () => {
     const width = measure("Hohenzollern-", fonts.semibold, 54) + 1;
     const wrapped = wrap("Hohenzollern-Sigmaringen", fonts.semibold, 54, width, 3);
-    expect(wrapped).toEqual({ lines: ["Hohenzollern-", "Sigmaringen"], complete: true, cut: false });
+    expect(wrapped).toEqual({ lines: ["Hohenzollern-", "Sigmaringen"], complete: true, broken: 1, cut: false });
+    // Room for "способ чего-", but "чего-то" fits a line of its own, so it moves down whole.
+    const roomy = measure("способ чего-", fonts.regular, 30) + 1;
+    expect(wrap("способ чего-то", fonts.regular, 30, roomy, 3).lines).toEqual(["способ", "чего-то"]);
+  });
+
+  it("keeps whole sentences of a paragraph too long for its room, or none", () => {
+    const width = measure("Hello there, friend!", fonts.regular, 30) + 1;
+    expect(whole("Hello there, friend! I make films and write about them.", fonts.regular, 30, width, 1)).toEqual({ lines: ["Hello there, friend!"], all: false });
+    expect(whole("One long sentence that cannot fit in a single line at all", fonts.regular, 30, width, 1)).toEqual({ lines: [], all: false });
+    expect(whole("Short.", fonts.regular, 30, width, 1)).toEqual({ lines: ["Short."], all: true });
   });
 
   it("balances a name over two lines", () => {
@@ -46,7 +56,7 @@ describe("cover text", () => {
 describe("cover layout", () => {
   const profiles: Cover[] = [
     page({}),
-    page({ title: "JR", text: "Artist until I find a real job:)\nEditions @atelierjr" }),
+    page({ title: "JR", text: "Artist until I find a real job:)\nEditions @atelierjr\nCreator of ⎆ neat.link" }),
     page({ title: "Maximilian Alexander von Hohenzollern-Sigmaringen", headline: "Architect and urban planner, Berlin and Vienna", text: "x ".repeat(400) }),
     page({ title: "😂", address: "neat.link/pavel_alexandrovich_durov", text: "😂 - 🔥 - 💀\nSomething real" }),
     page({ title: "Ульяна коуч ICI, Психолог", text: "Приветствую вас! Я дипломированный специалист, работаю в мультимодальном подходе." }),
@@ -58,18 +68,34 @@ describe("cover layout", () => {
         const metrics = text.family === "Inter" ? fonts.regular : fonts.semibold;
         const left = text.content === SIGN || /^[A-ZЀ-ӿ]{1,2}$/.test(text.content) ? text.x - text.size : text.x;
         expect(left, text.content).toBeGreaterThanOrEqual(56);
-        if (text.family !== "Noto Sans Symbols") expect(text.x + measure(text.content.replace(/&\w+;/g, "x"), metrics, text.size), text.content).toBeLessThanOrEqual(WIDTH - 56);
+        if (text.family !== FAMILY.symbols) expect(text.x + measure(text.content.replace(/&\w+;/g, "x"), metrics, text.size), text.content).toBeLessThanOrEqual(WIDTH - 56);
         expect(text.y - text.size * 0.73, text.content).toBeGreaterThanOrEqual(40);
         expect(text.y, text.content).toBeLessThanOrEqual(HEIGHT - 40);
       }
     }
   });
 
+  it("never ends a line cut short", () => {
+    for (const cover of profiles) {
+      for (const text of texts(coverSvg(cover, fonts))) expect(text.content, text.content).not.toMatch(/…$/);
+    }
+  });
+
+  it("hangs the sign before the address, which starts where the other lines do", () => {
+    const drawn = texts(coverSvg(profiles[1]!, fonts));
+    const at = drawn.findIndex((text) => text.content === "neat.link/ada");
+    const [signText, address, title] = [drawn[at - 1]!, drawn[at]!, drawn[1]!];
+    expect(signText.content).toBe(SIGN);
+    expect(address.x).toBe(title.x);
+    // Its ink ends before the address begins.
+    expect(signText.x + 0.551 * signText.size).toBeLessThan(address.x);
+  });
+
   it("leads the address with the sign and leaves out lines with nothing to read", () => {
     const drawn = texts(coverSvg(profiles[3]!, fonts)).map((text) => text.content);
     // A name with nothing to draw gives way to the handle.
-    expect(drawn.slice(1, 3).join("")).toBe("pavel_alexandrovich_durov");
-    expect(drawn).toContain("Something real");
+    const text = drawn.indexOf("Something real");
+    expect(drawn.slice(1, text).join("")).toBe("pavel_alexandrovich_durov");
     expect(drawn.some((line) => /^[\s-]+$/.test(line))).toBe(false);
     const address = drawn.indexOf("neat.link/pavel_alexandrovich_durov");
     expect(drawn[address - 1]).toBe(SIGN);

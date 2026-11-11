@@ -4,11 +4,12 @@ import resvgWasm from "@resvg/resvg-wasm/index_bg.wasm";
 // Binary modules must end in .bin to be bundled as data (see the Cloudflare
 // Vite plugin's module rules). Inter is under the SIL Open Font License,
 // beside them in OFL.txt; these are subset to Latin, Greek, and Cyrillic.
-// The sign ⎆ comes from Noto Sans Symbols at weight 600, subset to that one
-// character, also under the OFL (NotoSansSymbols-OFL.txt).
+// The sign ⎆ comes from JuliaMono SemiBold, subset to that one character
+// and renamed Neat Sign, as the OFL asks of a modified font
+// (NeatSign-OFL.txt).
 import regularFont from "./fonts/Inter-Regular.ttf.bin";
 import semiboldFont from "./fonts/InterDisplay-SemiBold.ttf.bin";
-import signFont from "./fonts/NotoSansSymbols-Sign.ttf.bin";
+import signFont from "./fonts/NeatSign.ttf.bin";
 import { type Cover, coverSvg, FAMILY, type Fonts } from "./cover";
 import { readFontMetrics, withFallback } from "./metrics";
 
