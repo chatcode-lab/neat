@@ -20,7 +20,7 @@ Cookies are never read, so the API can be called from anywhere.
 Every published page is Markdown at its address plus `.md`, or at its own
 address with `Accept: text/markdown`:
 
-    curl https://neat.link/elon.md
+    curl https://neat.link/borkasm.md
 
 ## Endpoints
 

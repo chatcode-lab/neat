@@ -49,7 +49,7 @@ Make a token in [Settings](${origin}/app/settings) and send it as
 ## Read any page
 
 Every published page is Markdown at its address plus \`.md\` (for example
-\`${origin}/elon.md\`), or at its own address with \`Accept: text/markdown\`.
+\`${origin}/borkasm.md\`), or at its own address with \`Accept: text/markdown\`.
 The list of pages is in [the sitemap](${origin}/sitemap.xml); an overview for
 language models is at [${origin}/llms.txt](${origin}/llms.txt).
 
