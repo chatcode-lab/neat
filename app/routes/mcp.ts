@@ -38,8 +38,8 @@ function contextFor(request: Request, userId: string): ToolContext {
     },
     async markdown(handle) {
       if (!(await withinLimits(request, "read", userId))) return { status: 429, text: RATE_LIMITED_MESSAGE };
-      const text = await pageMarkdown(env.DB, decodeURIComponent(handle), origin);
-      return text ? { status: 200, text } : { status: 404, text: "No published page has that handle." };
+      const page = await pageMarkdown(env.DB, decodeURIComponent(handle), origin);
+      return page ? { status: 200, text: page.text } : { status: 404, text: "No published page has that handle." };
     },
   };
 }

@@ -45,6 +45,7 @@ All bodies are JSON (`Content-Type: application/json`), at most 64 KB.
   "handle": "elon",
   "url": "https://neat.link/elon",
   "markdown_url": "https://neat.link/elon.md",
+  "domain": null,
   "published": true,
   "published_at": "2026-11-10T12:00:00.000Z",
   "updated_at": "2026-11-10T12:30:00.000Z",
@@ -58,6 +59,10 @@ All bodies are JSON (`Content-Type: application/json`), at most 64 KB.
   "picture": "https://media.neat.link/avatars/….jpg"
 }
 ```
+
+A site with its own domain has it in `domain` (`"elon.example"`), and its
+`url` and `markdown_url` are there: `https://elon.example/` and
+`https://elon.example/index.md`. Its neat.link address keeps working.
 
 ### Making and changing a site
 

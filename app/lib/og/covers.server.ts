@@ -41,7 +41,7 @@ export async function coverResponse(url: URL, cached: Cached): Promise<Response 
       title: site.page.title,
       headline: site.page.headline,
       text: markdownToText(site.page.body),
-      address: `${host}/${site.handle}`,
+      address: site.domain ?? `${host}/${site.handle}`,
       picture: (await storedPicture(env.MEDIA, site.page.imageKey))?.href ?? null,
     });
   }

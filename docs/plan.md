@@ -105,6 +105,31 @@ Dropped on purpose:
   HTML disabled, hard line breaks on. Links get `rel="nofollow ugc noopener"`.
   Legacy bodies were Telegram MarkdownV2 and are converted once on import.
 
+## Own domains
+
+A site can be served at its own domain (`borkasm.com`) as well as at
+`neat.link/<handle>`. The domain then is its canonical address: the page's
+canonical link, OpenGraph URL, Markdown front matter, the API's `url` and
+the address on its cover all name it, and the site moves from neat.link's
+sitemap to the domain's own. The domain serves the page at `/`, its
+Markdown at `/index.md`, a `robots.txt` and a sitemap, and nothing else;
+the twin with or without `www` and plain HTTP are sent to the domain. The
+Worker answers it with the same render and edge cache as the neat.link
+page. `domains` maps a domain to one site; a draft or deleted site's domain
+answers 404. Any host other than `APP_ORIGIN`'s is looked up there.
+
+For now only domains in neat.link's own Cloudflare account are connected:
+a route in `wrangler.jsonc` and a row in `domains` (borkasm.com and
+tractor.fm, 2026-11-13). Next, free for everyone (decided 2026-11-13):
+users' domains through Cloudflare for SaaS custom hostnames (100 free, then
+$0.10 a month each, so a hostname is registered only once its DNS points
+here, and removed when it stops), one CNAME to a target unique to the site
+(`<site-code>.byo.neat.link`), which also proves which site claims it. Root
+domains only where Cloudflare DNS can flatten a CNAME; elsewhere `www` and
+the registrar's forwarding, and we suggest moving DNS to Cloudflare. The
+provider is detected from the domain's nameservers; one-click setup through
+Domain Connect where providers accept our template, copy-paste otherwise.
+
 ## Agents
 
 - **MCP** at `/mcp`: stateless Streamable HTTP, hand-rolled JSON-RPC
@@ -219,7 +244,7 @@ Cut-over:
 
 ## Later (paid, one-time payment ~$100)
 
-Custom domain (Cloudflare for SaaS), subpages, limited file storage for
+Subpages, limited file storage for
 embeds, themes and backgrounds, forwarding address `<handle>@neat.link`
 (Email Routing), pixel trackers (Google, Meta, TikTok; needs a CSP exception
 per site), private (unlisted, `noindex`) pages.

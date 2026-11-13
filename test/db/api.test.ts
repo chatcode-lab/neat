@@ -10,6 +10,8 @@ vi.mock("../../app/lib/security/rate-limit.server", async (importOriginal) => {
 
 import { handleApi } from "../../app/lib/api/v1.server";
 import { accountRecord, linkTelegram, unlinkTelegram, userForTelegram } from "../../app/lib/db/accounts.server";
+import { connectedDomain } from "../../app/lib/db/domains.server";
+import { publishedSites } from "../../app/lib/db/sites.server";
 import { claimTelegramToken, issueTelegramToken, peekTelegramToken } from "../../app/lib/db/telegram-tokens.server";
 import { createToken, revokeToken, userForToken } from "../../app/lib/db/tokens.server";
 import { startSession } from "../../app/lib/sessions.server";
@@ -18,7 +20,7 @@ import { pageMarkdown } from "../../app/lib/views/markdown.server";
 
 const ORIGIN = "https://neat.link";
 const NOW = 1_800_000_000;
-const TABLES = ["telegram_tokens", "api_tokens", "oauth_codes", "oauth_clients", "pages", "sites", "telegram_users", '"session"', '"account"', '"user"'];
+const TABLES = ["telegram_tokens", "api_tokens", "oauth_codes", "oauth_clients", "domains", "pages", "sites", "telegram_users", '"session"', '"account"', '"user"'];
 
 async function reset() {
   await env.DB.batch(TABLES.map((table) => env.DB.prepare(`DELETE FROM ${table}`)));
@@ -83,10 +85,29 @@ describe("the API", () => {
 
     const published = await api(token, "PATCH", "sites/ada_lovelace", { published: true, headline: "First programmer" });
     expect(published.status).toBe(200);
-    const markdown = await pageMarkdown(env.DB, "ada_lovelace", ORIGIN);
+    const markdown = (await pageMarkdown(env.DB, "ada_lovelace", ORIGIN))?.text;
     expect(markdown).toContain('title: "Ada"');
     expect(markdown).toContain("Hello *world*");
     expect(markdown).toContain("- [Mail](mailto:ada@example.com)");
+  });
+
+  it("serves a site at its own domain, its canonical address", async () => {
+    const token = await user("ada", [["google", "g1"]]);
+    await api(token, "POST", "sites", { handle: "ada_lovelace", title: "Ada", published: true });
+    const { id } = (await env.DB.prepare(`SELECT id FROM sites WHERE handle = 'ada_lovelace'`).first<{ id: string }>())!;
+    await env.DB.prepare(`INSERT INTO domains VALUES ('ada.example', ?1, ?2)`).bind(id, NOW).run();
+
+    expect(await connectedDomain(env.DB, "ada.example")).toMatchObject({ hostname: "ada.example", handle: "ada_lovelace" });
+    expect(await connectedDomain(env.DB, "www.ada.example")).toMatchObject({ hostname: "ada.example" });
+    expect(await connectedDomain(env.DB, "other.example")).toBeNull();
+    expect((await pageMarkdown(env.DB, "ada_lovelace", ORIGIN))?.url).toBe("https://ada.example/");
+    const { site } = (await (await api(token, "GET", "sites/ada_lovelace")).json()) as { site: Record<string, unknown> };
+    expect(site).toMatchObject({ url: "https://ada.example/", markdown_url: "https://ada.example/index.md", domain: "ada.example" });
+    // neat.link's sitemap leaves it to the domain's own.
+    expect(await publishedSites(env.DB)).toEqual([]);
+
+    await api(token, "PATCH", "sites/ada_lovelace", { published: false });
+    expect(await connectedDomain(env.DB, "ada.example")).toBeNull();
   });
 
   it("keeps the handle rules and the site limit", async () => {

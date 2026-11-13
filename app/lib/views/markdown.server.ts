@@ -3,6 +3,7 @@ import { env } from "cloudflare:workers";
 import { shortUrl } from "../buttons";
 import { agentsMarkdown, homeMarkdown, privacyMarkdown, termsMarkdown } from "../copy";
 import { siteByHandle } from "../db/sites.server";
+import { siteUrl } from "../domains";
 import { HANDLE_PATTERN } from "../handles";
 import { mediaUrl } from "../media.server";
 
@@ -31,20 +32,21 @@ export function wantsMarkdown(request: Request): boolean {
 const yaml = (value: string) => JSON.stringify(value);
 
 /**
- * A published page as Markdown: front matter for programs, then the page
- * as a reader sees it, its buttons as a list of links. Null for a draft or
- * a handle no site has.
+ * A published page as Markdown, and its canonical address: front matter for
+ * programs, then the page as a reader sees it, its buttons as a list of
+ * links. Null for a draft or a handle no site has.
  */
-export async function pageMarkdown(db: D1Database, handle: string, origin: string): Promise<string | null> {
+export async function pageMarkdown(db: D1Database, handle: string, origin: string): Promise<{ text: string; url: string } | null> {
   if (!HANDLE_PATTERN.test(handle)) return null;
   const site = await siteByHandle(db, handle);
   if (!site || !site.published) return null;
   const { page } = site;
+  const url = siteUrl(site, origin);
   const front = [
     "---",
     `title: ${yaml(page.title)}`,
     ...(page.headline ? [`headline: ${yaml(page.headline)}`] : []),
-    `url: ${yaml(`${origin}/${site.handle}`)}`,
+    `url: ${yaml(url)}`,
     ...(page.imageKey ? [`picture: ${yaml(mediaUrl(page.imageKey, origin))}`] : []),
     `updated: ${yaml(new Date(site.updatedAt * 1000).toISOString())}`,
     "---",
@@ -55,7 +57,7 @@ export async function pageMarkdown(db: D1Database, handle: string, origin: strin
   if (page.buttons.length > 0) {
     parts.push(page.buttons.map((button) => `- [${button.label.replace(/([[\]\\])/g, "\\$1")}](${button.url}) — ${shortUrl(button.url)}`).join("\n"));
   }
-  return `${parts.join("\n\n")}\n`;
+  return { text: `${parts.join("\n\n")}\n`, url };
 }
 
 function markdownResponse(body: string, canonical: string, maxAge = 60): Response {
@@ -87,5 +89,5 @@ export async function markdownView(path: string, db: D1Database, origin: string)
   const handle = /^\/([^/]+)$/.exec(path)?.[1]?.toLowerCase();
   if (!handle) return null;
   const page = await pageMarkdown(db, handle, origin);
-  return page ? markdownResponse(page, `${origin}/${handle}`) : null;
+  return page ? markdownResponse(page.text, page.url) : null;
 }

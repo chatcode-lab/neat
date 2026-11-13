@@ -2,7 +2,9 @@ import { env } from "cloudflare:workers";
 import { createRequestHandler, RouterContextProvider } from "react-router";
 
 import { nonceContext, viewerContext, waitUntilContext } from "../app/context";
+import { connectedDomain } from "../app/lib/db/domains.server";
 import { sweepTelegramTokens } from "../app/lib/db/telegram-tokens.server";
+import { isAppHost } from "../app/lib/domains";
 import { mediaUrl } from "../app/lib/media.server";
 import { sweepOAuth } from "../app/lib/oauth/clients.server";
 import { authorizationServerMetadata, protectedResourceMetadata } from "../app/lib/oauth/metadata";
@@ -14,7 +16,7 @@ import { SESSION_COOKIE_PATTERN } from "../app/lib/session-cookie";
 import { loadViewer } from "../app/lib/viewer.server";
 import { markdownView, wantsMarkdown } from "../app/lib/views/markdown.server";
 import { isShareablePage, PAGE_CACHE_SECONDS, pageCacheKey, STATIC_PAGE_HEADER } from "../app/lib/views/page-cache";
-import { llmsTxt, robotsTxt, sitemapXml } from "../app/lib/views/seo.server";
+import { domainRobotsTxt, domainSitemapXml, llmsTxt, robotsTxt, sitemapXml } from "../app/lib/views/seo.server";
 
 const serverBuild = () => import("virtual:react-router/server-build");
 const requestHandler = createRequestHandler(serverBuild, import.meta.env.MODE);
@@ -109,14 +111,18 @@ function isPrefetch(request: Request): boolean {
   return ["Sec-Purpose", "Purpose", "X-Moz"].some((name) => request.headers.get(name)?.includes("prefetch") === true);
 }
 
-async function serve(request: Request, ctx: ExecutionContext): Promise<Response> {
-  const nonce = createNonce();
-  const options = {
+function securityOptions(nonce: string) {
+  return {
     nonce,
     dev: import.meta.env.DEV,
     indexable: !import.meta.env.DEV && env.ENVIRONMENT === "production",
     mediaOrigin: env.MEDIA_ORIGIN || undefined,
   };
+}
+
+async function serve(request: Request, ctx: ExecutionContext): Promise<Response> {
+  const nonce = createNonce();
+  const options = securityOptions(nonce);
   const secure = (response: Response) => withSecurityHeaders(request, response, options);
   const url = new URL(request.url);
 
@@ -205,10 +211,46 @@ async function serve(request: Request, ctx: ExecutionContext): Promise<Response>
   return response;
 }
 
+const notFound = (message: string) =>
+  new Response(message, { status: 404, headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "public, max-age=60" } });
+
+/**
+ * A site's own domain. Its page is at / and its Markdown at /index.md: the
+ * answers neat.link/<handle> and /<handle>.md give, rendered and cached as
+ * those are, with this domain as their canonical address. It has its own
+ * robots.txt and sitemap; plain HTTP and the twin with or without www are
+ * sent to the domain as connected, and every other address is not found.
+ * Static files (icons, styles, fonts) are answered before the Worker on any
+ * host, so the page's relative links to them work here too.
+ */
+async function serveDomain(request: Request, url: URL, ctx: ExecutionContext): Promise<Response> {
+  const options = securityOptions(createNonce());
+  const secure = (response: Response) => withSecurityHeaders(request, response, options);
+  const domain = await connectedDomain(env.DB, url.hostname);
+  if (!domain) return secure(notFound("No neat.link page is connected to this domain.\n"));
+  if (domain.hostname !== url.hostname || (url.protocol !== "https:" && !import.meta.env.DEV)) {
+    const location = `https://${domain.hostname}${url.pathname}${url.search}`;
+    return secure(new Response(null, { status: 301, headers: { Location: location, "Cache-Control": "public, max-age=3600" } }));
+  }
+  if (request.method !== "GET" && request.method !== "HEAD") {
+    return secure(new Response("Method Not Allowed\n", { status: 405, headers: { Allow: "GET, HEAD" } }));
+  }
+  if (url.pathname === "/" || url.pathname === "/index.md") {
+    const path = url.pathname === "/" ? `/${domain.handle}` : `/${domain.handle}.md`;
+    return serve(new Request(new URL(path, env.APP_ORIGIN), request), ctx);
+  }
+  const origin = `https://${domain.hostname}`;
+  if (url.pathname === "/robots.txt") return secure(text(domainRobotsTxt(origin, options.indexable), "text/plain"));
+  if (url.pathname === "/sitemap.xml") return secure(text(domainSitemapXml(origin, domain.updatedAt), "application/xml", 300));
+  return secure(notFound("Not Found\n"));
+}
+
 export default {
   async fetch(request, _workerEnv, ctx) {
+    const url = new URL(request.url);
+    if (!isAppHost(url.hostname, env.APP_ORIGIN)) return serveDomain(request, url, ctx);
     const response = await serve(request, ctx);
-    return isOpenPath(new URL(request.url).pathname) ? withCors(response) : response;
+    return isOpenPath(url.pathname) ? withCors(response) : response;
   },
 
   // Hourly: forgets expired OAuth codes and unused apps, expired sign-in and

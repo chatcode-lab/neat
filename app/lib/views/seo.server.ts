@@ -67,3 +67,14 @@ export async function sitemapXml(db: D1Database, origin: string): Promise<string
   ];
   return `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${entries.join("\n")}\n</urlset>\n`;
 }
+
+/** A site's own domain welcomes every crawler to its one page, as neat.link does. */
+export function domainRobotsTxt(origin: string, indexable: boolean): string {
+  if (!indexable) return "User-agent: *\nDisallow: /\n";
+  return `User-agent: *\nAllow: /\n\nSitemap: ${origin}/sitemap.xml\n`;
+}
+
+/** A site's own domain's sitemap: its page, at the domain's root. */
+export function domainSitemapXml(origin: string, updatedAt: number): string {
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n<url><loc>${xml(`${origin}/`)}</loc><lastmod>${w3c(updatedAt)}</lastmod></url>\n</urlset>\n`;
+}

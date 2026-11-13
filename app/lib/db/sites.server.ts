@@ -32,6 +32,8 @@ export interface Site {
   createdAt: number;
   /** The later of the site's and its main page's last change. */
   updatedAt: number;
+  /** Its own domain, the canonical address, when it has one. */
+  domain: string | null;
   page: Page;
 }
 
@@ -51,12 +53,14 @@ interface SiteRow {
   image_key: string | null;
   visibility: "public" | "unlisted";
   page_updated_at: number;
+  domain: string | null;
 }
 
 const SELECT_SITE = `
   SELECT site.id, site.owner_id, site.handle, site.published_at, site.theme, site.created_at, site.updated_at,
          page.id AS page_id, page.title, page.headline, page.body, page.buttons, page.image_key, page.visibility,
-         page.updated_at AS page_updated_at
+         page.updated_at AS page_updated_at,
+         (SELECT hostname FROM domains WHERE site_id = site.id) AS domain
   FROM sites AS site
   JOIN pages AS page ON page.site_id = site.id AND page.path = ''`;
 
@@ -70,6 +74,7 @@ function toSite(row: SiteRow): Site {
     theme: row.theme,
     createdAt: row.created_at,
     updatedAt: Math.max(row.updated_at, row.page_updated_at),
+    domain: row.domain,
     page: {
       id: row.page_id,
       title: row.title,
@@ -109,13 +114,17 @@ export async function ownedSite(db: D1Database, ownerId: string, handle: string)
   return site && site.ownerId === ownerId ? site : null;
 }
 
-/** Published, public sites for the sitemap: handle and last change. */
+/**
+ * Published, public sites for neat.link's sitemap: handle and last change.
+ * A site with its own domain is listed in that domain's sitemap instead.
+ */
 export async function publishedSites(db: D1Database, limit = 50_000): Promise<Array<{ handle: string; updatedAt: number }>> {
   const { results } = await db
     .prepare(
       `SELECT site.handle, max(site.updated_at, page.updated_at) AS updated_at
        FROM sites AS site JOIN pages AS page ON page.site_id = site.id AND page.path = ''
        WHERE site.deleted_at IS NULL AND site.published_at IS NOT NULL AND page.visibility = 'public'
+         AND NOT EXISTS (SELECT 1 FROM domains WHERE site_id = site.id)
        ORDER BY site.published_at LIMIT ?1`,
     )
     .bind(limit)
@@ -343,8 +352,8 @@ export async function suggestHandle(db: D1Database, candidates: Array<string | n
  * A short fingerprint of what a page's cover shows, so the cover's address
  * changes whenever it does and caches never serve an old one.
  */
-export function coverVersion(site: Pick<Site, "handle" | "page">): string {
-  const text = [site.handle, site.page.title, site.page.headline, site.page.body, site.page.imageKey ?? "", COVER_DESIGN].join("\u0000");
+export function coverVersion(site: Pick<Site, "handle" | "domain" | "page">): string {
+  const text = [site.handle, site.domain ?? "", site.page.title, site.page.headline, site.page.body, site.page.imageKey ?? "", COVER_DESIGN].join("\u0000");
   let hash = 0x811c9dc5;
   for (let index = 0; index < text.length; index += 1) {
     hash ^= text.charCodeAt(index);

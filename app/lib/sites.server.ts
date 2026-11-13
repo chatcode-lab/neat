@@ -16,6 +16,7 @@ import {
   suggestHandle,
   updatePage,
 } from "./db/sites.server";
+import { siteMarkdownUrl, siteUrl } from "./domains";
 import { handleProblem, normalizeHandle } from "./handles";
 import { deleteMedia, mediaUrl, PICTURE_PROBLEMS, storePicture, storePictureFrom } from "./media.server";
 
@@ -172,8 +173,9 @@ export async function removePictureFor(account: Account, handle: string, now: nu
 export function siteJson(site: Site, origin: string) {
   return {
     handle: site.handle,
-    url: `${origin}/${site.handle}`,
-    markdown_url: `${origin}/${site.handle}.md`,
+    url: siteUrl(site, origin),
+    markdown_url: siteMarkdownUrl(site, origin),
+    domain: site.domain,
     published: site.published,
     published_at: site.publishedAt ? new Date(site.publishedAt * 1000).toISOString() : null,
     updated_at: new Date(site.updatedAt * 1000).toISOString(),

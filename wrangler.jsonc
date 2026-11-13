@@ -20,6 +20,10 @@
 	"preview_urls": false,
 	"vars": {
 		"ENVIRONMENT": "production",
+		// neat.link's own origin, where a site's own domain sends its requests
+		// inside the Worker. Any other host is looked up as a site's domain;
+		// empty means every host is the app (staging on workers.dev).
+		"APP_ORIGIN": "http://localhost:5173",
 		// Where stored media is served from: the MEDIA bucket on its own public
 		// domain, with no Worker in the way. Empty means through the Worker at
 		// /media/<key>, as in local development and tests.
@@ -84,6 +88,7 @@
 			"preview_urls": false,
 			"vars": {
 				"ENVIRONMENT": "staging",
+				"APP_ORIGIN": "",
 				"MEDIA_ORIGIN": "",
 				"TELEGRAM_BOT_USERNAME": "NeatLinkBot"
 			},
@@ -135,9 +140,18 @@
 				"head_sampling_rate": 1,
 				"traces": { "enabled": true, "head_sampling_rate": 0.1 }
 			},
-			"routes": [{ "pattern": "neat.link/*", "zone_name": "neat.link" }],
+			// neat.link, and sites' own domains in neat.link's Cloudflare account
+			// (each also needs its row in the domains table).
+			"routes": [
+				{ "pattern": "neat.link/*", "zone_name": "neat.link" },
+				{ "pattern": "borkasm.com/*", "zone_name": "borkasm.com" },
+				{ "pattern": "www.borkasm.com/*", "zone_name": "borkasm.com" },
+				{ "pattern": "tractor.fm/*", "zone_name": "tractor.fm" },
+				{ "pattern": "www.tractor.fm/*", "zone_name": "tractor.fm" }
+			],
 			"vars": {
 				"ENVIRONMENT": "production",
+				"APP_ORIGIN": "https://neat.link",
 				"MEDIA_ORIGIN": "https://media.neat.link",
 				"TELEGRAM_BOT_USERNAME": "neatlink_bot"
 			},
