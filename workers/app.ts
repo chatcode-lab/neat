@@ -2,10 +2,15 @@ import { env } from "cloudflare:workers";
 import { createRequestHandler, RouterContextProvider } from "react-router";
 
 import { nonceContext, viewerContext, waitUntilContext } from "../app/context";
-import { connectedDomain } from "../app/lib/db/domains.server";
+import { enforcePublishLimits } from "../app/lib/db/billing.server";
+import { connectedDomain, ownershipAnswer } from "../app/lib/db/domains.server";
+import { publicSubpages } from "../app/lib/db/subpages.server";
 import { sweepTelegramTokens } from "../app/lib/db/telegram-tokens.server";
+import { checkDomains } from "../app/lib/domain-setup.server";
 import { isAppHost } from "../app/lib/domains";
 import { mediaUrl } from "../app/lib/media.server";
+import { parseVendorList } from "../app/lib/pixels";
+import { PLAN_LIMITS } from "../app/lib/plans";
 import { sweepOAuth } from "../app/lib/oauth/clients.server";
 import { authorizationServerMetadata, protectedResourceMetadata } from "../app/lib/oauth/metadata";
 import { bodyLimit, capRequestBody, tooLarge } from "../app/lib/security/body";
@@ -15,7 +20,7 @@ import { isSameOriginRequest } from "../app/lib/security/request";
 import { SESSION_COOKIE_PATTERN } from "../app/lib/session-cookie";
 import { loadViewer } from "../app/lib/viewer.server";
 import { markdownView, wantsMarkdown } from "../app/lib/views/markdown.server";
-import { isShareablePage, PAGE_CACHE_SECONDS, pageCacheKey, STATIC_PAGE_HEADER } from "../app/lib/views/page-cache";
+import { isShareablePage, PAGE_CACHE_SECONDS, pageCacheKey, PIXELS_HEADER, STATIC_PAGE_HEADER } from "../app/lib/views/page-cache";
 import { domainRobotsTxt, domainSitemapXml, llmsTxt, robotsTxt, sitemapXml } from "../app/lib/views/seo.server";
 
 const serverBuild = () => import("virtual:react-router/server-build");
@@ -39,22 +44,28 @@ async function cached(ctx: ExecutionContext, key: string, make: () => Promise<Re
 
 /**
  * Answers a page from the edge cache, or renders it and keeps it there when
- * it is static (see page-cache.ts). The kept copy carries only its type, and
- * every answer gets this response's security headers and nonce; static pages
- * have no scripts for a nonce to unlock.
+ * it is static (see page-cache.ts). The kept copy carries only its type and
+ * its pixels' vendors, and every answer gets this response's security
+ * headers and nonce; static pages have no inline scripts for a nonce to
+ * unlock.
  */
 async function cachedPage(ctx: ExecutionContext, key: string, render: () => Promise<Response>): Promise<Response> {
   const cache = await caches.open("pages");
   const keyRequest = new Request(key);
   const hit = await cache.match(keyRequest);
-  if (hit) return new Response(hit.body, { headers: { "Content-Type": hit.headers.get("Content-Type") ?? "text/html" } });
+  const kept = (response: Response) => {
+    const headers = new Headers({ "Content-Type": response.headers.get("Content-Type") ?? "text/html" });
+    const pixels = response.headers.get(PIXELS_HEADER);
+    if (pixels) headers.set(PIXELS_HEADER, pixels);
+    return headers;
+  };
+  if (hit) return new Response(hit.body, { headers: kept(hit) });
   const response = await render();
   if (!isShareablePage(response) || !response.body) return response;
-  const [kept, sent] = response.body.tee();
-  const type = response.headers.get("Content-Type") ?? "text/html";
-  ctx.waitUntil(
-    cache.put(keyRequest, new Response(kept, { headers: { "Content-Type": type, "Cache-Control": `public, max-age=${PAGE_CACHE_SECONDS}` } })),
-  );
+  const [stored, sent] = response.body.tee();
+  const headers = kept(response);
+  headers.set("Cache-Control", `public, max-age=${PAGE_CACHE_SECONDS}`);
+  ctx.waitUntil(cache.put(keyRequest, new Response(stored, { headers })));
   return new Response(sent, response);
 }
 
@@ -130,7 +141,7 @@ async function serve(request: Request, ctx: ExecutionContext): Promise<Response>
   // bearer token, never cookies, so a request from anywhere carries no one's
   // session and needs no Origin check. Telegram's webhook proves itself by
   // its secret header.
-  const crossOrigin = isOpenPath(url.pathname) || url.pathname === "/telegram/webhook";
+  const crossOrigin = isOpenPath(url.pathname) || url.pathname === "/telegram/webhook" || url.pathname === "/stripe/webhook";
   if (!crossOrigin && !isSameOriginRequest(request)) return secure(new Response("Forbidden", { status: 403 }));
   if (request.method === "OPTIONS" && isOpenPath(url.pathname)) return secure(new Response(null, { status: 204 }));
   // No body is read past its limit, whoever reads it; one that passes it is answered with a 413.
@@ -200,8 +211,11 @@ async function serve(request: Request, ctx: ExecutionContext): Promise<Response>
   const key = pageCacheKey(request, url, (await serverBuild()).assets.version);
   const rendered = key ? await cachedPage(ctx, key, render) : await render();
   if (capped.overLimit()) return secure(tooLarge(isOpenPath(url.pathname)));
-  const response = secure(rendered);
+  // A site's page with its owner's tracking pixels lets their vendors in.
+  const pixels = parseVendorList(rendered.headers.get(PIXELS_HEADER));
+  const response = withSecurityHeaders(request, rendered, { ...options, pixels });
   response.headers.delete(STATIC_PAGE_HEADER);
+  response.headers.delete(PIXELS_HEADER);
   // Unless the answer sets the session itself, as signing in or out does.
   if (!response.headers.getSetCookie().some((cookie) => SESSION_COOKIE_PATTERN.test(cookie))) {
     for (const cookie of sessionCookies) response.headers.append("Set-Cookie", cookie);
@@ -215,17 +229,23 @@ const notFound = (message: string) =>
   new Response(message, { status: 404, headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "public, max-age=60" } });
 
 /**
- * A site's own domain. Its page is at / and its Markdown at /index.md: the
- * answers neat.link/<handle> and /<handle>.md give, rendered and cached as
- * those are, with this domain as their canonical address. It has its own
- * robots.txt and sitemap; plain HTTP and the twin with or without www are
- * sent to the domain as connected, and every other address is not found.
- * Static files (icons, styles, fonts) are answered before the Worker on any
- * host, so the page's relative links to them work here too.
+ * A site's own domain. Its page is at / and its Markdown at /index.md, its
+ * subpages at /<path> and /<path>.md: the answers neat.link/<handle>,
+ * /<handle>/<path> and their .md give, rendered and cached as those are,
+ * with this domain as their canonical address. It has its own robots.txt
+ * and sitemap; plain HTTP and the twin with or without www are sent to the
+ * domain as connected, and every other address is not found. Static files
+ * (icons, styles, fonts, the pixel loader) are answered before the Worker
+ * on any host, so the page's relative links to them work here too.
  */
 async function serveDomain(request: Request, url: URL, ctx: ExecutionContext): Promise<Response> {
   const options = securityOptions(createNonce());
   const secure = (response: Response) => withSecurityHeaders(request, response, options);
+  // Cloudflare may ask a domain being set up to prove it points here, over plain HTTP.
+  if (url.pathname.startsWith("/.well-known/cf-custom-hostname-challenge/")) {
+    const answer = await ownershipAnswer(env.DB, url.hostname, url.pathname);
+    if (answer) return secure(new Response(answer, { headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" } }));
+  }
   const domain = await connectedDomain(env.DB, url.hostname);
   if (!domain) return secure(notFound("No neat.link page is connected to this domain.\n"));
   if (domain.hostname !== url.hostname || (url.protocol !== "https:" && !import.meta.env.DEV)) {
@@ -241,26 +261,47 @@ async function serveDomain(request: Request, url: URL, ctx: ExecutionContext): P
   }
   const origin = `https://${domain.hostname}`;
   if (url.pathname === "/robots.txt") return secure(text(domainRobotsTxt(origin, options.indexable), "text/plain"));
-  if (url.pathname === "/sitemap.xml") return secure(text(domainSitemapXml(origin, domain.updatedAt), "application/xml", 300));
+  if (url.pathname === "/sitemap.xml") {
+    const subpages = await publicSubpages(env.DB, domain.siteId);
+    return secure(text(domainSitemapXml(origin, domain.updatedAt, subpages), "application/xml", 300));
+  }
+  const subpage = /^\/([A-Za-z0-9-]{1,80})(\.md)?$/.exec(url.pathname);
+  if (subpage) {
+    const segment = subpage[1]!.toLowerCase();
+    if (segment !== subpage[1]) {
+      return secure(new Response(null, { status: 301, headers: { Location: `${origin}/${segment}${subpage[2] ?? ""}` } }));
+    }
+    return serve(new Request(new URL(`/${domain.handle}/${segment}${subpage[2] ?? ""}`, env.APP_ORIGIN), request), ctx);
+  }
   return secure(notFound("Not Found\n"));
 }
+
+/** The media bucket's own domain, should a route ever send it to the Worker: it goes on to the bucket. */
+const mediaHost = () => (env.MEDIA_ORIGIN ? new URL(env.MEDIA_ORIGIN).hostname : null);
 
 export default {
   async fetch(request, _workerEnv, ctx) {
     const url = new URL(request.url);
+    if (url.hostname === mediaHost()) return fetch(request);
     if (!isAppHost(url.hostname, env.APP_ORIGIN)) return serveDomain(request, url, ctx);
     const response = await serve(request, ctx);
     return isOpenPath(url.pathname) ? withCors(response) : response;
   },
 
   // Hourly: forgets expired OAuth codes and unused apps, expired sign-in and
-  // linking tokens, and expired sessions.
+  // linking tokens, and expired sessions; takes pages past an ended plan's
+  // limit back to drafts; checks domains waiting for DNS and connected ones.
   async scheduled(_controller, workerEnv, ctx) {
     const now = Math.floor(Date.now() / 1000);
     const run = (job: string, work: Promise<unknown>) =>
       ctx.waitUntil(work.catch((error: unknown) => console.error(job, error)));
     run("sweepOAuth", sweepOAuth(workerEnv.DB, now));
     run("sweepTelegramTokens", sweepTelegramTokens(workerEnv.DB, now));
+    run(
+      "enforcePublishLimits",
+      enforcePublishLimits(workerEnv.DB, now, { free: PLAN_LIMITS.free.published, domains: PLAN_LIMITS.domains.published, pro: PLAN_LIMITS.pro.published }),
+    );
+    run("checkDomains", checkDomains(now));
     run(
       "sweepSessions",
       workerEnv.DB.prepare(`DELETE FROM "session" WHERE "expiresAt" < ?1`).bind(new Date(now * 1000).toISOString()).run(),

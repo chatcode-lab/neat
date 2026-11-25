@@ -1,5 +1,6 @@
 import { TAGLINE } from "../copy";
 import { publishedSites } from "../db/sites.server";
+import { sitemapSubpages } from "../db/subpages.server";
 
 /**
  * Production welcomes every crawler, AI ones included, to every public page
@@ -56,14 +57,19 @@ const xml = (value: string) =>
 
 const w3c = (seconds: number) => new Date(seconds * 1000).toISOString();
 
-/** The sitemap: the home page, the pages about the site, and every published, public site. */
+/**
+ * The sitemap: the home page, the pages about the site, every published,
+ * public site, and their public subpages.
+ */
 export async function sitemapXml(db: D1Database, origin: string): Promise<string> {
-  const sites = await publishedSites(db, 49_990);
+  const sites = await publishedSites(db, 40_000);
+  const subpages = await sitemapSubpages(db, 9_990);
   const latest = sites.reduce((max, site) => Math.max(max, site.updatedAt), 0);
   const entries = [
     `<url><loc>${xml(`${origin}/`)}</loc>${latest ? `<lastmod>${w3c(latest)}</lastmod>` : ""}</url>`,
     ...["/agents", "/terms", "/privacy"].map((path) => `<url><loc>${xml(`${origin}${path}`)}</loc></url>`),
     ...sites.map((site) => `<url><loc>${xml(`${origin}/${site.handle}`)}</loc><lastmod>${w3c(site.updatedAt)}</lastmod></url>`),
+    ...subpages.map((sub) => `<url><loc>${xml(`${origin}/${sub.handle}/${sub.path}`)}</loc><lastmod>${w3c(sub.updatedAt)}</lastmod></url>`),
   ];
   return `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${entries.join("\n")}\n</urlset>\n`;
 }
@@ -74,7 +80,11 @@ export function domainRobotsTxt(origin: string, indexable: boolean): string {
   return `User-agent: *\nAllow: /\n\nSitemap: ${origin}/sitemap.xml\n`;
 }
 
-/** A site's own domain's sitemap: its page, at the domain's root. */
-export function domainSitemapXml(origin: string, updatedAt: number): string {
-  return `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n<url><loc>${xml(`${origin}/`)}</loc><lastmod>${w3c(updatedAt)}</lastmod></url>\n</urlset>\n`;
+/** A site's own domain's sitemap: its page, at the domain's root, and its public subpages. */
+export function domainSitemapXml(origin: string, updatedAt: number, subpages: Array<{ path: string; updatedAt: number }> = []): string {
+  const entries = [
+    `<url><loc>${xml(`${origin}/`)}</loc><lastmod>${w3c(updatedAt)}</lastmod></url>`,
+    ...subpages.map((sub) => `<url><loc>${xml(`${origin}/${sub.path}`)}</loc><lastmod>${w3c(sub.updatedAt)}</lastmod></url>`),
+  ];
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${entries.join("\n")}\n</urlset>\n`;
 }

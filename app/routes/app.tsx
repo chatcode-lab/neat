@@ -20,6 +20,9 @@ export default function Editor() {
         <NavLink to="/app" end className={tab}>
           Pages
         </NavLink>
+        <NavLink to="/app/plan" className={tab}>
+          Plan
+        </NavLink>
         <NavLink to="/app/settings" className={tab}>
           Settings
         </NavLink>

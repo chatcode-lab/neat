@@ -4,9 +4,9 @@ import { newId } from "../ids";
 import { MAX_HEADLINE_LENGTH, MAX_TITLE_LENGTH } from "../limits";
 import { MAX_BODY_LENGTH } from "../markdown";
 import { COVER_DESIGN } from "../og/cover";
-
-/** Sites one account may hold on the free plan (the legacy limit). */
-export const MAX_SITES = 2;
+import { type Pixels, storedPixels } from "../pixels";
+import { type Plan, planOf } from "../plans";
+import { productsFromList, runningProductsOf, servedDomainSql } from "./billing.server";
 
 /** What a page says: everything an owner or agent edits. */
 export interface PageContent {
@@ -32,8 +32,14 @@ export interface Site {
   createdAt: number;
   /** The later of the site's and its main page's last change. */
   updatedAt: number;
-  /** Its own domain, the canonical address, when it has one. */
+  /** Its own domain, the canonical address, when it has one and it is connected. */
   domain: string | null;
+  /** Its owner's tracking pixels, set whatever the plan; shown only with Pro. */
+  pixels: Pixels;
+  /** Whether its pages show the neat.link sign; hidden only with Pro. */
+  branding: boolean;
+  /** Its owner's plan, which decides what of the above applies. */
+  ownerPlan: Plan;
   page: Page;
 }
 
@@ -54,13 +60,17 @@ interface SiteRow {
   visibility: "public" | "unlisted";
   page_updated_at: number;
   domain: string | null;
+  pixels: string;
+  branding: number;
+  owner_products: string | null;
 }
 
 const SELECT_SITE = `
   SELECT site.id, site.owner_id, site.handle, site.published_at, site.theme, site.created_at, site.updated_at,
          page.id AS page_id, page.title, page.headline, page.body, page.buttons, page.image_key, page.visibility,
-         page.updated_at AS page_updated_at,
-         (SELECT hostname FROM domains WHERE site_id = site.id) AS domain
+         page.updated_at AS page_updated_at, site.pixels, site.branding,
+         ${servedDomainSql("site")} AS domain,
+         ${runningProductsOf("site.owner_id")} AS owner_products
   FROM sites AS site
   JOIN pages AS page ON page.site_id = site.id AND page.path = ''`;
 
@@ -75,6 +85,9 @@ function toSite(row: SiteRow): Site {
     createdAt: row.created_at,
     updatedAt: Math.max(row.updated_at, row.page_updated_at),
     domain: row.domain,
+    pixels: storedPixels(row.pixels),
+    branding: row.branding === 1,
+    ownerPlan: planOf(productsFromList(row.owner_products)),
     page: {
       id: row.page_id,
       title: row.title,
@@ -124,7 +137,7 @@ export async function publishedSites(db: D1Database, limit = 50_000): Promise<Ar
       `SELECT site.handle, max(site.updated_at, page.updated_at) AS updated_at
        FROM sites AS site JOIN pages AS page ON page.site_id = site.id AND page.path = ''
        WHERE site.deleted_at IS NULL AND site.published_at IS NOT NULL AND page.visibility = 'public'
-         AND NOT EXISTS (SELECT 1 FROM domains WHERE site_id = site.id)
+         AND ${servedDomainSql("site")} IS NULL
        ORDER BY site.published_at LIMIT ?1`,
     )
     .bind(limit)
@@ -162,20 +175,37 @@ function tidy(content: Partial<PageContent>): Partial<PageContent> {
 
 export type CreateResult =
   | { ok: true; site: Site }
-  | { ok: false; code: "site_limit" | "handle_taken"; message: string };
+  | { ok: false; code: "site_limit" | "publish_limit" | "handle_taken"; message: string };
+
+/** How many pages an owner may hold, published and in all, by their plan. */
+export interface SiteLimits {
+  published: number;
+  sites: number;
+}
+
+/** An owner's live sites, and how many of them are published. */
+export async function siteCounts(db: D1Database, ownerId: string): Promise<{ sites: number; published: number }> {
+  const row = await db
+    .prepare(
+      `SELECT count(*) AS sites, count(published_at) AS published FROM sites WHERE owner_id = ?1 AND deleted_at IS NULL`,
+    )
+    .bind(ownerId)
+    .first<{ sites: number; published: number }>();
+  return { sites: row?.sites ?? 0, published: row?.published ?? 0 };
+}
 
 function isUniqueViolation(error: unknown): boolean {
   return String(error).includes("UNIQUE");
 }
 
 /**
- * Makes a site with its main page, as a draft unless `publish`. The limit
- * on sites per account is part of the write, so two at once cannot pass it.
- * The handle must already have passed `handleProblem`.
+ * Makes a site with its main page, as a draft unless `publish`. The limits
+ * on sites per account are part of the write, so two at once cannot pass
+ * them. The handle must already have passed `handleProblem`.
  */
 export async function createSite(
   db: D1Database,
-  input: { ownerId: string; handle: string; content: PageContent; publish?: boolean; now: number },
+  input: { ownerId: string; handle: string; content: PageContent; publish?: boolean; limits: SiteLimits; now: number },
 ): Promise<CreateResult> {
   const siteId = newId();
   const content = tidy(input.content) as PageContent;
@@ -185,9 +215,10 @@ export async function createSite(
         .prepare(
           `INSERT INTO sites (id, owner_id, handle, published_at, created_at, updated_at)
            SELECT ?1, ?2, ?3, ?4, ?5, ?5
-           WHERE (SELECT count(*) FROM sites WHERE owner_id = ?2 AND deleted_at IS NULL) < ${MAX_SITES}`,
+           WHERE (SELECT count(*) FROM sites WHERE owner_id = ?2 AND deleted_at IS NULL) < ?6
+             AND (?4 IS NULL OR (SELECT count(*) FROM sites WHERE owner_id = ?2 AND deleted_at IS NULL AND published_at IS NOT NULL) < ?7)`,
         )
-        .bind(siteId, input.ownerId, input.handle, input.publish ? input.now : null, input.now),
+        .bind(siteId, input.ownerId, input.handle, input.publish ? input.now : null, input.now, input.limits.sites, input.limits.published),
       db
         .prepare(
           `INSERT INTO pages (id, site_id, path, title, headline, body, buttons, created_at, updated_at)
@@ -196,7 +227,10 @@ export async function createSite(
         .bind(newId(), siteId, content.title, content.headline, content.body, JSON.stringify(content.buttons), input.now),
     ]);
     if (site!.meta.changes === 0) {
-      return { ok: false, code: "site_limit", message: `An account has at most ${MAX_SITES} sites. Delete one to make another.` };
+      const counts = await siteCounts(db, input.ownerId);
+      return counts.sites >= input.limits.sites
+        ? { ok: false, code: "site_limit", message: siteLimitMessage(input.limits) }
+        : { ok: false, code: "publish_limit", message: publishLimitMessage(input.limits) };
     }
   } catch (error) {
     if (isUniqueViolation(error)) return { ok: false, code: "handle_taken", message: "That handle is taken." };
@@ -277,17 +311,54 @@ export async function renameSite(
   return same ? "same" : "missing";
 }
 
-/** Publishes or unpublishes a site; publishing again keeps the first date. */
+export const siteLimitMessage = (limits: SiteLimits) =>
+  `Your plan has room for ${limits.sites} pages, drafts included. Delete one to make another${limits.sites < 20 ? ", or move to Pro for up to 20" : ""}.`;
+
+export const publishLimitMessage = (limits: SiteLimits) =>
+  `Your plan publishes up to ${limits.published} pages at once. Unpublish one first${limits.published < 10 ? ", or move to Pro for up to 10" : ""}.`;
+
+/**
+ * Publishes or unpublishes a site; publishing again keeps the first date.
+ * Publishing checks the owner's limit in the same write. False when the
+ * site is not the owner's, or publishing would pass the limit.
+ */
 export async function setPublished(
   db: D1Database,
-  input: { siteId: string; ownerId: string; published: boolean; now: number },
+  input: { siteId: string; ownerId: string; published: boolean; maxPublished: number; now: number },
+): Promise<boolean> {
+  const statement = input.published
+    ? db
+        .prepare(
+          `UPDATE sites SET published_at = COALESCE(published_at, ?3), updated_at = ?3
+           WHERE id = ?1 AND owner_id = ?2 AND deleted_at IS NULL
+             AND (published_at IS NOT NULL
+               OR (SELECT count(*) FROM sites WHERE owner_id = ?2 AND deleted_at IS NULL AND published_at IS NOT NULL) < ?4)`,
+        )
+        .bind(input.siteId, input.ownerId, input.now, input.maxPublished)
+    : db
+        .prepare(`UPDATE sites SET published_at = NULL, updated_at = ?3 WHERE id = ?1 AND owner_id = ?2 AND deleted_at IS NULL`)
+        .bind(input.siteId, input.ownerId, input.now);
+  const result = await statement.run();
+  return result.meta.changes > 0;
+}
+
+/** Saves a site's Pro settings: its pixels and whether it shows the neat.link sign. */
+export async function setSiteSettings(
+  db: D1Database,
+  input: { siteId: string; ownerId: string; pixels?: Pixels; branding?: boolean; now: number },
 ): Promise<boolean> {
   const result = await db
     .prepare(
-      `UPDATE sites SET published_at = ${input.published ? "COALESCE(published_at, ?3)" : "NULL"}, updated_at = ?3
+      `UPDATE sites SET pixels = COALESCE(?3, pixels), branding = COALESCE(?4, branding), updated_at = ?5
        WHERE id = ?1 AND owner_id = ?2 AND deleted_at IS NULL`,
     )
-    .bind(input.siteId, input.ownerId, input.now)
+    .bind(
+      input.siteId,
+      input.ownerId,
+      input.pixels === undefined ? null : JSON.stringify(input.pixels),
+      input.branding === undefined ? null : input.branding ? 1 : 0,
+      input.now,
+    )
     .run();
   return result.meta.changes > 0;
 }

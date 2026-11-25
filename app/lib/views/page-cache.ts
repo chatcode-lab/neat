@@ -1,3 +1,4 @@
+import { RESERVED_HANDLES } from "../handles";
 import { SESSION_COOKIE_PATTERN } from "../session-cookie";
 import { readTheme } from "../theme";
 
@@ -15,6 +16,13 @@ export const PAGE_CACHE_SECONDS = 60;
 export const STATIC_PAGE_HEADER = "X-Static-Page";
 
 /**
+ * Set by a site's page when its owner added tracking pixels: their vendors,
+ * "google meta". The Worker lets those vendors into the page's Content
+ * Security Policy and never sends the header on.
+ */
+export const PIXELS_HEADER = "X-Page-Pixels";
+
+/**
  * The cache key for a page request any visitor without an account would be
  * answered the same way, or null. It separates themes, which the page is
  * drawn in, and builds, whose assets the page names; query strings are left
@@ -22,7 +30,10 @@ export const STATIC_PAGE_HEADER = "X-Static-Page";
  */
 export function pageCacheKey(request: Request, url: URL, build: string): string | null {
   if (request.method !== "GET") return null;
-  if (!/^\/[a-z0-9_]*$/.test(url.pathname)) return null;
+  // The home page, a page about the site, a site's page, or one of its
+  // subpages, below a handle no route of the site's own has.
+  const path = /^\/([a-z0-9_]*)(\/[a-z0-9-]+)?$/.exec(url.pathname);
+  if (!path || (path[2] && RESERVED_HANDLES.has(path[1]!))) return null;
   const cookie = request.headers.get("Cookie") ?? "";
   if (SESSION_COOKIE_PATTERN.test(cookie)) return null;
   return `${url.origin}/__page/${encodeURIComponent(build)}${url.pathname}?theme=${readTheme(cookie)}`;

@@ -39,6 +39,7 @@ bot token; see `app/lib/telegram/verify.ts`, `signForTests`).
 | `npm run preview` | Production build under `vite preview` |
 | `npm run legacy:export -- <neat.sqlite> <out>` | Legacy data → `legacy.sql` + `legacy-images.sh` |
 | `npm run telegram:setup -- <origin>` | Webhook, commands, menu button |
+| `npm run stripe:setup -- staging\|production` | Stripe prices, billing portal, webhook; puts the key and webhook secret into the Worker's secrets |
 | `npm run deploy:production` | Build and deploy the production Worker |
 
 ## Staging
@@ -52,7 +53,12 @@ npm run db:migrate:staging
 npm run deploy:staging
 npm run secret:staging -- <NAME>      # same secrets as production, for the test bot
 TELEGRAM_BOT_TOKEN=… TELEGRAM_WEBHOOK_SECRET=… npm run telegram:setup -- https://neat-link-staging.borkasm.workers.dev
+npm run stripe:setup -- staging       # Stripe test mode; pay with test cards
 ```
+
+Stripe's keys are in `.env` too (`STRIPE_TEST_API_KEY`, `STRIPE_LIVE_API_KEY`).
+`NEAT_STRIPE_TEST_KEY=sk_test_… npx vitest run stripe-live` checks that Stripe
+test mode accepts every checkout the Worker asks for.
 
 Bot tokens live in the gitignored `.env` (`STAGING_BOT_TOKEN`,
 `PRODUCTION_BOT_TOKEN`, `STAGING_WEBHOOK_SECRET`, and the bots' Telegram Login
@@ -73,7 +79,10 @@ client secrets `STAGING_TELEGRAM_CLIENT_SECRET`, `PRODUCTION_TELEGRAM_CLIENT_SEC
    `npm run legacy:export -- <latest neat.sqlite> .wrangler/legacy`,
    `wrangler d1 execute DB --env production --remote --file .wrangler/legacy/legacy.sql`,
    `sh .wrangler/legacy/legacy-images.sh --remote`.
-4. `npm run deploy:production` (the route `neat.link/*` replaces the S3 site).
+4. `npm run stripe:setup -- production` (live mode: prices, portal, webhook,
+   and the `STRIPE_*` secrets; a deploy fails without them), then
+   `npm run deploy:production` (the route `neat.link/*` replaces the S3 site).
+   In Stripe, add the VAT registrations under Tax → Registrations.
 5. Stop the legacy bot, then `npm run telegram:setup -- https://neat.link`
    and do the two BotFather steps it prints (Login Widget allowed URLs and
    client secret, Mini App URL).

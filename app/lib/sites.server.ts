@@ -2,38 +2,38 @@ import { env } from "cloudflare:workers";
 
 import { parseButtons } from "./buttons";
 import type { Account } from "./db/accounts.server";
+import { billingOf } from "./db/billing.server";
 import {
   contentProblem,
   createSite,
   deleteSite,
   ownedSite,
   type PageContent,
+  publishLimitMessage,
   renameSite,
   setPageImage,
   setPublished,
+  setSiteSettings,
   type Site,
+  siteCounts,
   sitesOf,
   suggestHandle,
   updatePage,
 } from "./db/sites.server";
 import { siteMarkdownUrl, siteUrl } from "./domains";
+import { parsePixels, PIXEL_VENDOR_IDS, type Pixels } from "./pixels";
+import { allows, type Plan, PLAN_LIMITS, planRequiredMessage } from "./plans";
 import { handleProblem, normalizeHandle } from "./handles";
 import { deleteMedia, mediaUrl, PICTURE_PROBLEMS, storePicture, storePictureFrom } from "./media.server";
+import { removeSiteDomain } from "./domain-setup.server";
+import { Refusal } from "./refusal";
 
-/**
+export { Refusal };
+
+/*
  * What the editor, the API and the MCP server do to sites, in one place, so
- * each checks the same rules. A refusal carries an HTTP status, a stable
- * code for programs, and a sentence for people.
+ * each checks the same rules.
  */
-export class Refusal extends Error {
-  constructor(
-    readonly status: number,
-    readonly code: string,
-    message: string,
-  ) {
-    super(message);
-  }
-}
 
 /** What may be sent to make or change a site. Absent fields are left as they are. */
 export interface SiteInput {
@@ -43,6 +43,10 @@ export interface SiteInput {
   body?: unknown;
   buttons?: unknown;
   published?: unknown;
+  /** Pro: tracking pixels, {"google": "G-…", "meta": "…", "tiktok": "…"}; an empty ID removes one. */
+  pixels?: unknown;
+  /** Pro: false hides the neat.link sign at the bottom of the site's pages. */
+  branding?: unknown;
 }
 
 function text(value: unknown, field: string): string | undefined {
@@ -94,11 +98,14 @@ export function listSites(account: Account): Promise<Site[]> {
  * name. It is a draft unless `published` is true.
  */
 export async function createSiteFor(account: Account, input: SiteInput, now: number): Promise<Site> {
+  const { plan } = await billingOf(env.DB, account.id);
   const handle =
     input.handle === undefined || input.handle === ""
       ? await suggestHandle(env.DB, [account.telegram?.username, account.email?.split("@")[0], account.name])
       : checkedHandle(input.handle, account);
   const content = contentOf(input);
+  // Settings are checked before the site is made, so a refusal leaves nothing behind.
+  const settings = checkedSettings(input, {}, true, plan);
   const result = await createSite(env.DB, {
     ownerId: account.id,
     handle,
@@ -109,10 +116,44 @@ export async function createSiteFor(account: Account, input: SiteInput, now: num
       buttons: content.buttons ?? [],
     },
     publish: input.published === true,
+    limits: PLAN_LIMITS[plan],
     now,
   });
   if (!result.ok) throw new Refusal(result.code === "handle_taken" ? 409 : 403, result.code, result.message);
-  return result.site;
+  if (settings.pixels === undefined && settings.branding === undefined) return result.site;
+  await setSiteSettings(env.DB, { siteId: result.site.id, ownerId: account.id, ...settings, now });
+  return requireOwnedSite(account, result.site.handle);
+}
+
+/**
+ * A site's Pro settings as sent, checked: tracking pixels merged into the
+ * current ones, and whether to show the neat.link sign. They may always be
+ * turned off or left as they are; adding a pixel or hiding the sign needs
+ * Pro.
+ */
+function checkedSettings(
+  input: SiteInput,
+  current: Pixels,
+  showsBranding: boolean,
+  plan: Plan,
+): { pixels?: Pixels; branding?: boolean } {
+  if (input.branding !== undefined && typeof input.branding !== "boolean") {
+    throw new Refusal(400, "invalid_field", "branding must be true or false.");
+  }
+  let pixels: Pixels | undefined;
+  if (input.pixels !== undefined) {
+    const parsed = parsePixels(input.pixels, current);
+    if (!parsed.ok) throw new Refusal(400, "invalid_pixels", parsed.problem);
+    pixels = parsed.pixels;
+  }
+  const addsPixel = pixels !== undefined && PIXEL_VENDOR_IDS.some((vendor) => pixels[vendor] && pixels[vendor] !== current[vendor]);
+  if (addsPixel && !allows(plan, "pixels")) throw planRequired("pixels");
+  if (input.branding === false && showsBranding && !allows(plan, "branding")) throw planRequired("branding");
+  return { pixels, branding: input.branding as boolean | undefined };
+}
+
+function planRequired(feature: Parameters<typeof planRequiredMessage>[0]): Refusal {
+  return new Refusal(402, "plan_required", `${planRequiredMessage(feature)} See the plans at /app/plan, or ask for a payment link with POST /api/v1/checkout.`);
 }
 
 /** Changes a site: its content, its handle, and whether it is published. */
@@ -121,6 +162,12 @@ export async function updateSiteFor(account: Account, currentHandle: string, inp
   const content = contentOf(input);
   if (input.published !== undefined && typeof input.published !== "boolean") {
     throw new Refusal(400, "invalid_field", "published must be true or false.");
+  }
+  const settings = checkedSettings(input, site.pixels, site.branding, site.ownerPlan);
+  // A publish past the plan's limit is refused before anything else is saved.
+  const limits = PLAN_LIMITS[site.ownerPlan];
+  if (input.published === true && !site.published && (await siteCounts(env.DB, account.id)).published >= limits.published) {
+    throw new Refusal(403, "publish_limit", publishLimitMessage(limits));
   }
   let handle = site.handle;
   if (input.handle !== undefined && normalizeHandle(String(input.handle)) !== site.handle) {
@@ -131,14 +178,21 @@ export async function updateSiteFor(account: Account, currentHandle: string, inp
   if (Object.keys(content).length > 0) {
     await updatePage(env.DB, { siteId: site.id, ownerId: account.id, content, now });
   }
+  if (settings.pixels !== undefined || settings.branding !== undefined) {
+    await setSiteSettings(env.DB, { siteId: site.id, ownerId: account.id, ...settings, now });
+  }
   if (typeof input.published === "boolean" && input.published !== site.published) {
-    await setPublished(env.DB, { siteId: site.id, ownerId: account.id, published: input.published, now });
+    // The limit holds in the write too, for two publishes at once.
+    const done = await setPublished(env.DB, { siteId: site.id, ownerId: account.id, published: input.published, maxPublished: limits.published, now });
+    if (!done && input.published) throw new Refusal(403, "publish_limit", publishLimitMessage(limits));
   }
   return requireOwnedSite(account, handle);
 }
 
 export async function deleteSiteFor(account: Account, handle: string, now: number): Promise<void> {
   const site = await requireOwnedSite(account, handle);
+  // Its domain goes first, so the name is free and nothing is left billed.
+  await removeSiteDomain(site.id);
   const deleted = await deleteSite(env.DB, { siteId: site.id, ownerId: account.id, now });
   if (deleted) await deleteMedia(deleted.imageKey);
 }
@@ -184,5 +238,9 @@ export function siteJson(site: Site, origin: string) {
     body: site.page.body,
     buttons: site.page.buttons,
     picture: site.page.imageKey ? mediaUrl(site.page.imageKey, origin) : null,
+    // Pro settings: kept whatever the plan, shown on the page only with Pro.
+    pixels: site.pixels,
+    branding: site.branding,
+    pro_active: allows(site.ownerPlan, "pixels"),
   };
 }

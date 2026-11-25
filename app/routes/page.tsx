@@ -2,12 +2,14 @@ import { env } from "cloudflare:workers";
 import { data } from "react-router";
 
 import { PageCard } from "~/components/page-card";
-import { siteByHandle, coverVersion } from "~/lib/db/sites.server";
+import { PageFooter, PixelScript } from "~/components/page-extras";
+import { coverVersion, siteByHandle } from "~/lib/db/sites.server";
 import { siteMarkdownUrl, siteUrl } from "~/lib/domains";
 import { HANDLE_PATTERN } from "~/lib/handles";
 import { renderMarkdown, summary } from "~/lib/markdown";
-import { mediaUrl } from "~/lib/media.server";
+import { filesPrefix, mediaUrl } from "~/lib/media.server";
 import { pageMeta } from "~/lib/meta";
+import { siteExtras } from "~/lib/views/site-extras.server";
 import { viewerOf } from "~/lib/viewer.server";
 import type { RouteHandle } from "~/root";
 
@@ -32,23 +34,34 @@ export async function loader({ params, url, context }: Route.LoaderArgs) {
   if (params.handle !== site.handle) throw Response.redirect(new URL(`/${site.handle}`, url).href, 301);
 
   const origin = url.origin;
-  return {
-    handle: site.handle,
-    published: site.published,
-    origin,
-    host: url.host,
-    url: siteUrl(site, origin),
-    markdown: siteMarkdownUrl(site, origin),
-    cover: `${origin}/og/${site.handle}.png?v=${coverVersion(site)}`,
-    description: summary([site.page.headline, site.page.body].filter(Boolean).join("\n\n")) || `${site.page.title} on neat.link`,
-    page: {
-      title: site.page.title,
-      headline: site.page.headline,
-      bodyHtml: renderMarkdown(site.page.body),
-      buttons: site.page.buttons,
-      picture: site.page.imageKey ? mediaUrl(site.page.imageKey, origin) : null,
+  const extras = siteExtras(site);
+  return data(
+    {
+      handle: site.handle,
+      published: site.published,
+      origin,
+      host: url.host,
+      url: siteUrl(site, origin),
+      markdown: siteMarkdownUrl(site, origin),
+      cover: `${origin}/og/${site.handle}.png?v=${coverVersion(site)}`,
+      description: summary([site.page.headline, site.page.body].filter(Boolean).join("\n\n")) || `${site.page.title} on neat.link`,
+      pixels: extras.pixels,
+      branding: extras.branding,
+      page: {
+        title: site.page.title,
+        headline: site.page.headline,
+        bodyHtml: renderMarkdown(site.page.body, { filesPrefix: filesPrefix(origin) }),
+        buttons: site.page.buttons,
+        picture: site.page.imageKey ? mediaUrl(site.page.imageKey, origin) : null,
+      },
     },
-  };
+    { headers: extras.headers },
+  );
+}
+
+/** The pixels' header reaches the Worker, which opens the page's policy to their vendors. */
+export function headers({ loaderHeaders }: Route.HeadersArgs) {
+  return loaderHeaders;
 }
 
 export function meta({ loaderData }: Route.MetaArgs) {
@@ -79,11 +92,8 @@ export default function PublicPage({ loaderData }: Route.ComponentProps) {
       <div className="flex flex-1 flex-col justify-center">
         <PageCard page={loaderData.page} />
       </div>
-      <footer className="pt-14 text-center text-xs text-text-faint">
-        <a href={`${loaderData.origin}/`} className="inline-flex items-center gap-1 hover:text-text-muted">
-          <span aria-hidden>⎆</span> {loaderData.host}
-        </a>
-      </footer>
+      <PageFooter origin={loaderData.origin} host={loaderData.host} branding={loaderData.branding} />
+      <PixelScript pixels={loaderData.pixels} />
     </main>
   );
 }

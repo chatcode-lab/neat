@@ -3,6 +3,8 @@ declare namespace Cloudflare {
   interface Env {
     /** "production" where pages may be indexed; anything else keeps crawlers out. */
     ENVIRONMENT: string;
+    /** Production only: a token that may edit the neat.link zone's custom hostnames. */
+    CF_API_TOKEN?: string;
   }
 }
 

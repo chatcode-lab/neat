@@ -47,6 +47,16 @@ const EXAMPLE = {
   picture: null,
 };
 
+const PLANS = [
+  ["Free", "$0", "2 published pages, and 2 drafts."],
+  ["Own domain", "$10 once", "Your pages at your own domains."],
+  [
+    "Pro",
+    "$50 a year, or $100 once",
+    "Up to 10 pages, own domains, articles, files, Google, Meta and TikTok pixels, and no neat.link sign.",
+  ],
+];
+
 const points = (bot: string) => [
   ["Nothing to design", "A page is a title, a short text and buttons. It looks right on every phone, in light and dark."],
   ["Agent-friendly", "Let Claude, ChatGPT or any MCP client write and update it. Every page is also Markdown at /yourname.md."],
@@ -82,6 +92,21 @@ export default function Home({ loaderData }: Route.ComponentProps) {
             <p className="mt-1 text-text-muted">{text}</p>
           </div>
         ))}
+      </section>
+      <section aria-labelledby="pricing" className="flex flex-col gap-4">
+        <h2 id="pricing" className="text-xl font-semibold">
+          Pricing
+        </h2>
+        <div className="grid gap-4 sm:grid-cols-3">
+          {PLANS.map(([name, price, text]) => (
+            <div key={name} className="rounded-md border border-border px-4 py-3">
+              <h3 className="font-semibold">{name}</h3>
+              <p className="text-lg font-bold">{price}</p>
+              <p className="mt-1 text-sm text-text-muted">{text}</p>
+            </div>
+          ))}
+        </div>
+        <p className="text-sm text-text-faint">Prices plus VAT where it applies.</p>
       </section>
     </main>
   );

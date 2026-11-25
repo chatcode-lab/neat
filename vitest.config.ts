@@ -30,7 +30,14 @@ export default defineConfig({
               ratelimits: {},
               bindings: {
                 ENVIRONMENT: "test",
+                APP_ORIGIN: "https://neat.link",
                 MEDIA_ORIGIN: "",
+                DOMAIN_TARGET: "byo.neat.link",
+                CF_ZONE_ID: "",
+                // A real test-mode key only for test/db/stripe-live.test.ts, given
+                // for one run: NEAT_STRIPE_TEST_KEY=sk_test_… npx vitest run stripe-live
+                STRIPE_SECRET_KEY: process.env.NEAT_STRIPE_TEST_KEY?.startsWith("sk_test_") ? process.env.NEAT_STRIPE_TEST_KEY : "sk_test_not_a_real_key",
+                STRIPE_WEBHOOK_SECRET: "whsec_test_secret",
                 TELEGRAM_BOT_USERNAME: "neatlink_test_bot",
                 TELEGRAM_BOT_TOKEN: "123456:test-token",
                 TELEGRAM_WEBHOOK_SECRET: "test-webhook-secret",

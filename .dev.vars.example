@@ -19,3 +19,10 @@ TELEGRAM_WEBHOOK_SECRET=replace-with-a-random-string
 # (your bot → Login Widget), whose allowed URLs must include
 # http://localhost:5173 and http://localhost:5173/auth/telegram/callback.
 TELEGRAM_CLIENT_SECRET=replace-with-the-bots-client-secret
+
+# Stripe's test-mode secret key (sk_test_…), and the signing secret of a
+# webhook endpoint that reaches this machine, such as the one
+# `stripe listen --forward-to localhost:5173/stripe/webhook` prints. Plans
+# can be bought locally with Stripe's test cards.
+STRIPE_SECRET_KEY=sk_test_replace-with-your-test-key
+STRIPE_WEBHOOK_SECRET=whsec_replace-with-the-endpoint-secret

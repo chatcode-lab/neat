@@ -19,12 +19,15 @@ export default [
   // The Mini App's entry, opened from the bot.
   route("tg", "routes/tg.tsx"),
   route("telegram/webhook", "routes/telegram-webhook.ts"),
+  // Payments: Stripe tells of them here.
+  route("stripe/webhook", "routes/stripe-webhook.ts"),
 
   // The editor.
   route("app", "routes/app.tsx", [
     index("routes/app-home.tsx"),
     route("new", "routes/app-new.tsx"),
     route("sites/:handle", "routes/app-site.tsx"),
+    route("plan", "routes/app-plan.tsx"),
     route("settings", "routes/app-settings.tsx"),
   ]),
 
@@ -38,6 +41,7 @@ export default [
   route("oauth/authorize", "routes/oauth-authorize.tsx"),
   route("oauth/:endpoint", "routes/oauth.ts"),
 
-  // A site's page, neat.link/<handle>. Every fixed route above wins over it.
+  // A site's page, neat.link/<handle>, and its subpages. Every fixed route above wins over them.
   route(":handle", "routes/page.tsx"),
+  route(":handle/:sub", "routes/subpage.tsx"),
 ] satisfies RouteConfig;

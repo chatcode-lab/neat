@@ -1,4 +1,5 @@
 import { HANDLE_PATTERN, RESERVED_HANDLES } from "../handles";
+import type { PixelVendor } from "../pixels";
 import { buildSitePolicy } from "./csp";
 
 export interface SecurityHeaderOptions {
@@ -9,6 +10,8 @@ export interface SecurityHeaderOptions {
   indexable: boolean;
   /** The media bucket's own domain, when it has one. */
   mediaOrigin?: string;
+  /** Tracking pixels on this page, whose vendors the policy lets in. */
+  pixels?: readonly PixelVendor[];
 }
 
 /**
@@ -18,7 +21,7 @@ export interface SecurityHeaderOptions {
  */
 export function isFrameablePath(pathname: string): boolean {
   if (pathname === "/tg" || pathname === "/app" || pathname.startsWith("/app/")) return true;
-  const handle = /^\/([a-z0-9_]+)$/.exec(pathname)?.[1];
+  const handle = /^\/([a-z0-9_]+)(?:\/[a-z0-9-]+)?$/.exec(pathname)?.[1];
   return Boolean(handle && HANDLE_PATTERN.test(handle) && !RESERVED_HANDLES.has(handle));
 }
 
@@ -35,7 +38,7 @@ export function withSecurityHeaders(request: Request, response: Response, option
 
   headers.set(
     "Content-Security-Policy",
-    buildSitePolicy({ nonce: options.nonce, dev: options.dev, mediaOrigin: options.mediaOrigin, frameable }),
+    buildSitePolicy({ nonce: options.nonce, dev: options.dev, mediaOrigin: options.mediaOrigin, frameable, pixels: options.pixels }),
   );
   // X-Frame-Options has no allow-list; where Telegram may frame, the policy's
   // frame-ancestors decides alone.

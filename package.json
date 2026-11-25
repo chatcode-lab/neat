@@ -16,6 +16,7 @@
     "legacy:export": "tsx scripts/legacy-export.ts",
     "legacy:import:local": "npm run legacy:export -- ../neat-legacy/db/neat.sqlite .wrangler/legacy && wrangler d1 execute DB --local --file .wrangler/legacy/legacy.sql && sh .wrangler/legacy/legacy-images.sh --local",
     "telegram:setup": "tsx scripts/telegram-setup.ts",
+    "stripe:setup": "tsx scripts/stripe-setup.ts",
     "deploy:staging": "CLOUDFLARE_ENV=staging npm run build && wrangler deploy",
     "deploy:production": "CLOUDFLARE_ENV=production npm run build && wrangler deploy",
     "secret:staging": "wrangler secret put -c wrangler.jsonc --env staging",

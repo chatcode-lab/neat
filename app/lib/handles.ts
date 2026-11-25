@@ -20,8 +20,8 @@ export const RESERVED_HANDLES: ReadonlySet<string> = new Set([
   "about", "account", "admin", "agents", "api", "app", "apps", "assets", "auth", "bot", "build",
   "dashboard", "docs", "edit", "favicon", "help", "index", "legal", "llms", "login", "logout", "mcp",
   "media", "new", "oauth", "og", "pricing", "privacy", "robots", "security", "settings", "signin",
-  "signout", "signup", "sitemap", "static", "status", "support", "terms", "tg", "theme", "welcome",
-  "well_known", "www",
+  "signout", "signup", "sitemap", "static", "status", "stripe", "support", "terms", "tg", "theme",
+  "welcome", "well_known", "www", "plan", "plans", "upgrade", "checkout",
   // The site's own names and voices.
   "neat", "neatlink", "neat_link", "official", "team", "staff", "root", "system", "telegram", "mail",
   "email", "noreply", "no_reply", "postmaster", "hostmaster", "webmaster", "abuse", "billing",

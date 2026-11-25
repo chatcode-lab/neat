@@ -20,7 +20,7 @@ import { pageMarkdown } from "../../app/lib/views/markdown.server";
 
 const ORIGIN = "https://neat.link";
 const NOW = 1_800_000_000;
-const TABLES = ["telegram_tokens", "api_tokens", "oauth_codes", "oauth_clients", "domains", "pages", "sites", "telegram_users", '"session"', '"account"', '"user"'];
+const TABLES = ["telegram_tokens", "api_tokens", "oauth_codes", "oauth_clients", "media", "purchases", "domains", "pages", "sites", "telegram_users", '"session"', '"account"', '"user"'];
 
 async function reset() {
   await env.DB.batch(TABLES.map((table) => env.DB.prepare(`DELETE FROM ${table}`)));
@@ -95,7 +95,12 @@ describe("the API", () => {
     const token = await user("ada", [["google", "g1"]]);
     await api(token, "POST", "sites", { handle: "ada_lovelace", title: "Ada", published: true });
     const { id } = (await env.DB.prepare(`SELECT id FROM sites WHERE handle = 'ada_lovelace'`).first<{ id: string }>())!;
-    await env.DB.prepare(`INSERT INTO domains VALUES ('ada.example', ?1, ?2)`).bind(id, NOW).run();
+    await env.DB.prepare(`INSERT INTO domains (site_id, hostname, code, kind, status, created_at) VALUES (?1, 'ada.example', 'c0de', 'route', 'active', ?2)`)
+      .bind(id, NOW)
+      .run();
+    // Served while the owner's plan has own domains.
+    expect(await connectedDomain(env.DB, "ada.example")).toBeNull();
+    await env.DB.prepare(`INSERT INTO purchases (id, user_id, product, created_at) VALUES ('grant_ada', 'ada', 'domains', ?1)`).bind(NOW).run();
 
     expect(await connectedDomain(env.DB, "ada.example")).toMatchObject({ hostname: "ada.example", handle: "ada_lovelace" });
     expect(await connectedDomain(env.DB, "www.ada.example")).toMatchObject({ hostname: "ada.example" });
@@ -110,16 +115,25 @@ describe("the API", () => {
     expect(await connectedDomain(env.DB, "ada.example")).toBeNull();
   });
 
-  it("keeps the handle rules and the site limit", async () => {
+  it("keeps the handle rules and the free plan's limits: 2 published, 4 in all", async () => {
     const token = await user("ada", [["google", "g1"], ["telegram", "42"]], "ada42");
     expect(((await (await api(token, "POST", "sites", { handle: "ada" })).json()) as { error: string }).error).toBe("invalid_handle");
     expect(((await (await api(token, "POST", "sites", { handle: "settings" })).json()) as { error: string }).error).toBe("invalid_handle");
     // A handle may be as short as the owner's own Telegram username.
-    expect((await api(token, "POST", "sites", { handle: "ada42" })).status).toBe(201);
-    expect((await api(token, "POST", "sites", {})).status).toBe(201);
-    const third = await api(token, "POST", "sites", { handle: "adathird" });
+    expect((await api(token, "POST", "sites", { handle: "ada42", published: true })).status).toBe(201);
+    expect((await api(token, "POST", "sites", { published: true })).status).toBe(201);
+    const third = await api(token, "POST", "sites", { handle: "adathird", published: true });
     expect(third.status).toBe(403);
-    expect(((await third.json()) as { error: string }).error).toBe("site_limit");
+    expect(((await third.json()) as { error: string }).error).toBe("publish_limit");
+    // A draft still fits, and publishing it does not.
+    expect((await api(token, "POST", "sites", { handle: "adathird" })).status).toBe(201);
+    const publish = await api(token, "PATCH", "sites/adathird", { published: true });
+    expect(publish.status).toBe(403);
+    expect(((await publish.json()) as { error: string }).error).toBe("publish_limit");
+    expect((await api(token, "POST", "sites", { handle: "adafourth" })).status).toBe(201);
+    const fifth = await api(token, "POST", "sites", { handle: "adafifth" });
+    expect(fifth.status).toBe(403);
+    expect(((await fifth.json()) as { error: string }).error).toBe("site_limit");
   });
 
   it("refuses another owner's site and a taken handle", async () => {
