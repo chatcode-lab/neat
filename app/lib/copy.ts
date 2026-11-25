@@ -78,8 +78,8 @@ publish.
 
 ## What only the owner can do
 
-Sign up (with Google), pay, and add DNS records for their own domain.
-Everything else an agent can do. When the owner wants something their plan
+Sign up (with Google), pay, add DNS records for their own domain, and see
+invoices or cancel on the Plan page. Everything else an agent can do. When the owner wants something their plan
 lacks, \`start_checkout\` gives them a link to pay; the plan changes as soon
 as they have.
 

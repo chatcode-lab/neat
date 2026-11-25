@@ -1,7 +1,7 @@
 import { env } from "cloudflare:workers";
 
 import guide from "../../../docs/api.md?raw";
-import { accountPlan, billingPortal, planJson, requireFeature, startCheckout } from "../billing.server";
+import { accountPlan, planJson, requireFeature, startCheckout } from "../billing.server";
 import { type Account, accountRecord } from "../db/accounts.server";
 import type { MediaFile } from "../db/media.server";
 import { userForToken } from "../db/tokens.server";
@@ -174,11 +174,6 @@ export async function handleApi(request: Request, path: string): Promise<Respons
       const { product } = await body(request);
       const checkout = await startCheckout(account, product, origin);
       return json({ ...checkout, note: "Give this link to the account's owner to pay. The plan changes as soon as they have paid." }, 201);
-    }
-
-    if (resource === "billing" && segments.length === 1 && method === "POST") {
-      await limit(request, "write", account);
-      return json(await billingPortal(account, origin), 201);
     }
 
     if (resource === "media") {

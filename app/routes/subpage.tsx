@@ -43,7 +43,8 @@ export async function loader({ params, url, context }: Route.LoaderArgs) {
 
   const { page, via } = found;
   const origin = url.origin;
-  const extras = siteExtras(site);
+  // Pixels only at the public address: a private one would reach analytics.
+  const extras = siteExtras(site, visible && via === "path");
   const address = subpageUrl(site, segment, origin);
   return data(
     {

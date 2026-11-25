@@ -9,6 +9,7 @@ import {
   domainOf,
   domainsToCheck,
   dropDomain,
+  hostnameHeld,
   orphanedHostnames,
   saveDomainCheck,
 } from "./db/domains.server";
@@ -22,6 +23,16 @@ import { requireOwnedSite } from "./sites.server";
 
 /** How long a connected domain may point elsewhere before it is let go, and stops being billed. */
 const LOST_SECONDS = 7 * 24 * 3600;
+
+/**
+ * Deletes a custom hostname at Cloudflare, so it is no longer billed,
+ * unless another claim on the same name holds it (`exceptSiteId` is the
+ * claim letting go, or null when none is left).
+ */
+async function releaseHostname(cfId: string, exceptSiteId: string | null): Promise<void> {
+  if (!saasConfigured() || (await hostnameHeld(env.DB, cfId, exceptSiteId))) return;
+  await removeHostname(cfId);
+}
 
 const hostOf = (origin: string) => {
   try {
@@ -121,7 +132,7 @@ export async function checkDomain(record: DomainRecord, now: number, entitled: b
     return;
   }
   const letGo = async (error: string, stalled = false) => {
-    if (record.cfId && saasConfigured()) await removeHostname(record.cfId);
+    if (record.cfId) await releaseHostname(record.cfId, record.siteId);
     await save({
       status: "pending",
       cfId: null,
@@ -176,15 +187,20 @@ export async function checkDomain(record: DomainRecord, now: number, entitled: b
       cfHttpBody: hostname.httpBody,
       stalledAt: null,
     };
+    let saved: Awaited<ReturnType<typeof save>> | undefined;
     if (hostname.status === "active" && hostname.ssl === "active") {
-      await save({ ...made, status: "active", error: null, verifiedAt: record.verifiedAt ?? now, lostAt: null });
+      saved = await save({ ...made, status: "active", error: null, verifiedAt: record.verifiedAt ?? now, lostAt: null });
     } else if (record.status === "active") {
       await lose("Cloudflare stopped serving the domain for a week, so it was let go. Check its DNS records, then connect it again.", made);
     } else if (registeredAt <= now - LOST_SECONDS) {
       await letGo("Cloudflare saw no request for the domain reach neat.link within a week, so it was let go. Check its CNAME record, then check again.", true);
     } else {
-      await save({ ...made, error: null });
+      saved = await save({ ...made, error: null });
     }
+    // Disconnected or replaced while Cloudflare made it: nothing names the
+    // hostname now, so it would stay billed. A newer claim on the same name
+    // that already holds it keeps it.
+    if (saved === "gone") await releaseHostname(hostname.id, null);
   } catch (error) {
     if (!(error instanceof SaasError)) throw error;
     console.error("custom hostname", record.hostname, error.message);
@@ -225,7 +241,7 @@ export async function setDomainFor(account: Account, handle: string, input: unkn
         `or move ${hostname}'s DNS to Cloudflare (free), which can.`,
     );
   }
-  if (current?.cfId && saasConfigured()) await removeHostname(current.cfId);
+  if (current?.cfId) await releaseHostname(current.cfId, site.id);
   await claimDomain(env.DB, {
     siteId: site.id,
     hostname,
@@ -266,21 +282,25 @@ export async function removeDomainFor(account: Account, handle: string): Promise
 export async function removeSiteDomain(siteId: string): Promise<void> {
   const record = await domainOf(env.DB, siteId);
   if (!record) return;
-  if (record.cfId && saasConfigured()) {
+  if (record.cfId) {
     try {
-      await removeHostname(record.cfId);
+      await releaseHostname(record.cfId, siteId);
     } catch (error) {
       if (!(error instanceof SaasError)) throw error;
       throw new Refusal(503, "try_again", "The domain could not be disconnected just now. Try again in a minute.");
     }
   }
-  await dropDomain(env.DB, siteId);
+  const dropped = await dropDomain(env.DB, siteId);
+  // A check may have made its hostname meanwhile.
+  if (dropped?.cfId && dropped.cfId !== record.cfId) {
+    await releaseHostname(dropped.cfId, null).catch((error: unknown) => console.error("custom hostname left", dropped.hostname, error));
+  }
 }
 
 /** The hourly check: waiting claims, connected domains, and hostnames of deleted sites. */
 export async function checkDomains(now: number): Promise<void> {
   for (const orphan of await orphanedHostnames(env.DB)) {
-    if (saasConfigured()) await removeHostname(orphan.cfId);
+    await releaseHostname(orphan.cfId, orphan.siteId);
     await dropDomain(env.DB, orphan.siteId);
   }
   // Each check is a few DNS, Cloudflare and database calls; 50 an hour stays well inside a run's limits.

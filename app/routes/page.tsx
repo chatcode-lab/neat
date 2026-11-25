@@ -34,7 +34,7 @@ export async function loader({ params, url, context }: Route.LoaderArgs) {
   if (params.handle !== site.handle) throw Response.redirect(new URL(`/${site.handle}`, url).href, 301);
 
   const origin = url.origin;
-  const extras = siteExtras(site);
+  const extras = siteExtras(site, site.published);
   return data(
     {
       handle: site.handle,

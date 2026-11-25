@@ -36,7 +36,9 @@ Only a person can pay: `POST /api/v1/checkout` gives a link for the
 account's owner to open. The plan changes as soon as they have paid. When
 a plan ends, nothing is deleted: pages past the free limit go back to
 drafts (newest first), and domains, subpages, pixels and the hidden sign
-stop applying until it is back.
+stop applying until it is back. Invoices, the card and cancelling the
+yearly plan are on the Plan page (`/app/plan`), for the owner signed in;
+a token cannot open them.
 
 ## Endpoints
 
@@ -48,7 +50,6 @@ files and pictures, which may be sent as they are.
 | GET | `/api/v1/me` | The account the token acts for, and its plan. |
 | GET | `/api/v1/plan` | The plan: what it allows, what is used, and what can be bought. |
 | POST | `/api/v1/checkout` | `{"product": "domains" \| "pro_year" \| "pro_life"}`: a payment link for the owner. |
-| POST | `/api/v1/billing` | A link to Stripe's billing portal: invoices, card, cancelling Pro yearly. |
 | GET | `/api/v1/sites` | The account's sites. |
 | POST | `/api/v1/sites` | Makes a site (within the plan's limits). |
 | GET | `/api/v1/sites/{handle}` | One of the account's sites. |
@@ -234,7 +235,7 @@ Errors are JSON: `{ "error": "<code>", "message": "<a sentence to show>" }`.
 | 401 | `unauthorized` |
 | 402 | `plan_required`: the plan lacks this; the message names the plan and price |
 | 403 | `site_limit`, `publish_limit`, `subpage_limit`, `media_quota` |
-| 404 | `not_found`, `no_domain`, `no_billing` |
+| 404 | `not_found`, `no_domain` |
 | 409 | `handle_taken`, `domain_taken`, `path_taken`, `already_bought` |
 | 413 | `too_large` |
 | 422 | `picture_failed`, `file_failed` |

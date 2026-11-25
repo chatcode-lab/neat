@@ -214,7 +214,7 @@ export const TOOLS: ReadonlyArray<Tool<ToolContext>> = [
     name: "get_plan",
     title: "Get the plan",
     description:
-      "The account's plan (free, domains or pro), what it allows, how much of it is used, and the products it could buy with their prices (in USD, plus VAT where it applies).",
+      "The account's plan (free, domains or pro), what it allows, how much of it is used, and the products it could buy with their prices (in USD, plus VAT where it applies). Invoices, the card and cancelling are on the Plan page at /app/plan, for the user signed in; no tool can reach them.",
     inputSchema: object({}),
     annotations: { readOnlyHint: true, openWorldHint: false },
     run: async (_args, context) => fromApi(await context.api("GET", "plan"), context.origin),

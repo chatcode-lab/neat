@@ -20,8 +20,15 @@ CREATE TABLE purchases (
   -- Null for a purchase that lasts; for the yearly plan, the end of the
   -- paid year and a few days' grace, moved on at each renewal.
   ends_at INTEGER,
-  refunded_at INTEGER
+  refunded_at INTEGER,
+  -- What is still to be done at Stripe for it: 'refund' a payment for what
+  -- the account already had, or 'stop_yearly' plans that Pro for life
+  -- replaces. Null once done. pending_lock is when a request took it on,
+  -- so two do not do it at once; one that stopped half way is retried.
+  pending TEXT CHECK (pending IN ('refund', 'stop_yearly')),
+  pending_lock INTEGER
 ) STRICT;
+CREATE INDEX purchases_pending ON purchases (pending_lock) WHERE pending IS NOT NULL;
 CREATE INDEX purchases_user ON purchases (user_id);
 CREATE INDEX purchases_payment ON purchases (payment_intent_id) WHERE payment_intent_id IS NOT NULL;
 

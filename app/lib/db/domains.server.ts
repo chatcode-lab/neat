@@ -130,9 +130,10 @@ export async function claimDomain(
 }
 
 /**
- * Records a check's result. Turning active can fail when another site took
- * the same name first; then the claim stays pending with that as its error,
- * and the answer is false.
+ * Records a check's result: "saved"; "taken" when turning active failed
+ * because another site took the same name first (the claim stays pending,
+ * with that as its error); or "gone" when the claim was disconnected or
+ * replaced while the check ran, so nothing was saved.
  */
 export async function saveDomainCheck(
   db: D1Database,
@@ -144,7 +145,7 @@ export async function saveDomainCheck(
       "status" | "cfId" | "sslStatus" | "registeredAt" | "cfHttpPath" | "cfHttpBody" | "stalledAt" | "error" | "checkedAt" | "verifiedAt" | "lostAt"
     >
   >,
-): Promise<boolean> {
+): Promise<"saved" | "taken" | "gone"> {
   const columns: Record<string, string> = {
     status: "status",
     cfId: "cf_id",
@@ -165,19 +166,32 @@ export async function saveDomainCheck(
     values.push(value);
     sets.push(`${columns[field]} = ?${values.length}`);
   }
-  if (sets.length === 0) return true;
+  if (sets.length === 0) sets.push("site_id = site_id");
   try {
     // The code keeps a check that raced a new claim from writing over it.
-    await db.prepare(`UPDATE domains SET ${sets.join(", ")} WHERE site_id = ?1 AND code = ?2`).bind(...values).run();
-    return true;
+    const result = await db.prepare(`UPDATE domains SET ${sets.join(", ")} WHERE site_id = ?1 AND code = ?2`).bind(...values).run();
+    return result.meta.changes > 0 ? "saved" : "gone";
   } catch (error) {
     if (!String(error).includes("UNIQUE")) throw error;
-    await db
+    const result = await db
       .prepare(`UPDATE domains SET error = ?3, checked_at = ?4 WHERE site_id = ?1 AND code = ?2`)
       .bind(siteId, code, "Another page is connected to this domain.", changes.checkedAt ?? null)
       .run();
-    return false;
+    return result.meta.changes > 0 ? "taken" : "gone";
   }
+}
+
+/**
+ * Whether a claim other than this site's holds a custom hostname. Claims
+ * for one name share Cloudflare's one hostname for it, so one claim letting
+ * go must not delete it from under another. With no site, any claim counts.
+ */
+export async function hostnameHeld(db: D1Database, cfId: string, exceptSiteId: string | null): Promise<boolean> {
+  const row = await db
+    .prepare(`SELECT 1 FROM domains WHERE cf_id = ?1 AND (?2 IS NULL OR site_id != ?2) LIMIT 1`)
+    .bind(cfId, exceptSiteId)
+    .first();
+  return Boolean(row);
 }
 
 export async function dropDomain(db: D1Database, siteId: string): Promise<DomainRecord | null> {

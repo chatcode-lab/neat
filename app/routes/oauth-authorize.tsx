@@ -95,7 +95,8 @@ export default function Authorize({ loaderData, actionData }: Route.ComponentPro
         <h1 className="text-2xl font-semibold">Connect {loaderData.client.name}?</h1>
         <p className="mt-2 text-text-muted">
           It will be able to read, create, change, publish and delete the pages of <strong className="text-text">{loaderData.account}</strong>,
-          until you disconnect it in Settings.
+          with their files and domains, and get payment links for you to open, until you disconnect it in Settings. It cannot pay, or see
+          your invoices.
         </p>
       </div>
       <dl className="rounded border border-border bg-surface px-4 py-3 text-sm">

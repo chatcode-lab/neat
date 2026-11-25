@@ -12,7 +12,7 @@ vi.mock("../../app/lib/og/render.server", () => ({ renderCover: vi.fn(), storedP
 
 import { handleApi } from "../../app/lib/api/v1.server";
 import { signStripePayload } from "../../app/lib/billing/stripe.server";
-import { fulfilCheckout, startCheckout, subscriptionEnd } from "../../app/lib/billing.server";
+import { finishPendingPurchases, fulfilCheckout, startCheckout, subscriptionEnd } from "../../app/lib/billing.server";
 import { billingOf, enforcePublishLimits } from "../../app/lib/db/billing.server";
 import { accountRecord } from "../../app/lib/db/accounts.server";
 import { connectedDomain, domainOf, ownershipAnswer } from "../../app/lib/db/domains.server";
@@ -24,6 +24,7 @@ import { coverResponse } from "../../app/lib/og/covers.server";
 import { siteExtras } from "../../app/lib/views/site-extras.server";
 import { pageMarkdown, subpageMarkdown } from "../../app/lib/views/markdown.server";
 import { action as stripeWebhook } from "../../app/routes/stripe-webhook";
+import { loader as subpageLoader } from "../../app/routes/subpage";
 
 const ORIGIN = "https://neat.link";
 const NOW = Math.floor(Date.now() / 1000);
@@ -61,7 +62,7 @@ async function answer<T = Record<string, unknown>>(response: Response | Promise<
 }
 
 /** Calls out of the Worker, answered here: Stripe, the DNS resolver and Cloudflare's API. */
-type Outbound = (url: URL, init: RequestInit & { body?: string }) => Response | Promise<Response> | null;
+type Outbound = (url: URL, init: RequestInit & { body?: string }) => Response | null | Promise<Response | null>;
 let outbound: Outbound[] = [];
 const sent: Array<{ url: string; method: string; body: string }> = [];
 
@@ -243,6 +244,14 @@ describe("plans and payments", () => {
     await grant("ada", "domains");
     outbound.push((url, init) => (url.pathname === "/v1/refunds" && init.method === "POST" ? Response.json({ id: "re_1" }) : null));
     outbound.push((url) => (url.pathname === "/v1/payment_intents/pi_back" ? Response.json({ latest_charge: { refunded: true } }) : null));
+    outbound.push((url) => (url.pathname === "/v1/payment_intents/pi_dup" ? Response.json({ latest_charge: { refunded: false } }) : null));
+    // Disputed and lost: the charge only says disputed, the dispute says lost.
+    outbound.push((url) =>
+      url.pathname === "/v1/payment_intents/pi_lost" ? Response.json({ latest_charge: { refunded: false, disputed: true } }) : null,
+    );
+    outbound.push((url) =>
+      url.pathname === "/v1/disputes" && url.searchParams.get("payment_intent") === "pi_lost" ? Response.json({ data: [{ status: "lost" }] }) : null,
+    );
     const session = (id: string, product: string, paymentIntent: string) => ({
       id,
       mode: "payment",
@@ -260,9 +269,106 @@ describe("plans and payments", () => {
     expect(new URLSearchParams(refund!.body).get("payment_intent")).toBe("pi_dup");
     // Refunded before it was ever recorded: kept for the record, giving nothing.
     expect(await fulfilCheckout(session("cs_back", "pro_life", "pi_back"), NOW)).toBe(false);
+    expect(await fulfilCheckout(session("cs_lost", "pro_life", "pi_lost"), NOW)).toBe(false);
     expect((await billingOf(env.DB, "ada")).plan).toBe("domains");
-    const rows = await env.DB.prepare(`SELECT id FROM purchases WHERE refunded_at IS NOT NULL ORDER BY id`).all<{ id: string }>();
-    expect(rows.results.map((row) => row.id)).toEqual(["cs_back", "cs_dup"]);
+    const rows = await env.DB.prepare(`SELECT id, pending FROM purchases WHERE refunded_at IS NOT NULL ORDER BY id`).all<{ id: string }>();
+    expect(rows.results).toEqual([
+      { id: "cs_back", pending: null },
+      { id: "cs_dup", pending: null },
+      { id: "cs_lost", pending: null },
+    ]);
+    // Only what Stripe can expand on a payment is asked for.
+    const intents = sent.filter((call) => call.url.includes("/v1/payment_intents/"));
+    expect(intents.map((call) => new URL(call.url).searchParams.getAll("expand[0]"))).toEqual([["latest_charge"], ["latest_charge"], ["latest_charge"]]);
+    expect(sent.filter((call) => call.url.endsWith("/v1/refunds"))).toHaveLength(1);
+  });
+
+  const yearly = (id: string, subscription: string) => ({
+    id,
+    mode: "subscription",
+    payment_status: "paid",
+    client_reference_id: "ada",
+    metadata: { product: "pro_year" },
+    customer: "cus_1",
+    subscription,
+    payment_intent: null,
+    amount_total: 6200,
+    currency: "usd",
+  });
+
+  /** Stripe's side of yearly subscriptions: each with its first invoice and payment. */
+  function subscriptions(wait: (id: string) => Promise<void> = async () => {}) {
+    outbound.push(async (url, init) => {
+      const match = /^\/v1\/subscriptions\/(sub_\w+)$/.exec(url.pathname);
+      if (!match || init.method !== "GET") return null;
+      await wait(match[1]!);
+      return Response.json({ id: match[1], status: "active", latest_invoice: `in_${match[1]}`, items: { data: [{ current_period_end: NOW + YEAR }] } });
+    });
+    outbound.push((url, init) => (url.pathname.startsWith("/v1/subscriptions/") && init.method === "DELETE" ? Response.json({ status: "canceled" }) : null));
+    outbound.push((url) => {
+      const match = /^\/v1\/invoices\/in_(sub_\w+)$/.exec(url.pathname);
+      return match ? Response.json({ payments: { data: [{ payment: { payment_intent: `pi_${match[1]}` } }] } }) : null;
+    });
+  }
+
+  it("gives a checkout told of twice at once only once, and never takes it for a duplicate", async () => {
+    await user("ada");
+    // The second request reads the subscription only once the first has recorded the purchase.
+    let asked = 0;
+    subscriptions(async () => {
+      asked += 1;
+      if (asked === 1) return;
+      for (let tries = 0; tries < 200; tries++) {
+        if (await env.DB.prepare(`SELECT 1 FROM purchases WHERE id = 'cs_race'`).first()) return;
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+    });
+    const results = await Promise.all([fulfilCheckout(yearly("cs_race", "sub_race"), NOW), fulfilCheckout(yearly("cs_race", "sub_race"), NOW)]);
+    expect(results.sort()).toEqual([false, true]);
+    expect(asked).toBe(2);
+    expect(sent.filter((call) => call.method === "DELETE" || call.url.endsWith("/v1/refunds"))).toEqual([]);
+    const billing = await billingOf(env.DB, "ada");
+    expect(billing.plan).toBe("pro");
+    expect(billing.running.map((purchase) => purchase.id)).toEqual(["cs_race"]);
+  });
+
+  it("refunds the later of two payments for the same plan paid at once", async () => {
+    await user("ada");
+    subscriptions();
+    outbound.push((url, init) => (url.pathname === "/v1/refunds" && init.method === "POST" ? Response.json({ id: "re_1" }) : null));
+    const results = await Promise.all([fulfilCheckout(yearly("cs_one", "sub_one"), NOW), fulfilCheckout(yearly("cs_two", "sub_two"), NOW)]);
+    expect(results.filter(Boolean)).toHaveLength(1);
+    const billing = await billingOf(env.DB, "ada");
+    expect(billing.running).toHaveLength(1);
+    const kept = billing.running[0]!.subscriptionId!;
+    const other = kept === "sub_one" ? "sub_two" : "sub_one";
+    const deleted = sent.filter((call) => call.method === "DELETE").map((call) => new URL(call.url).pathname);
+    expect(deleted).toEqual([`/v1/subscriptions/${other}`]);
+    const refunds = sent.filter((call) => call.url.endsWith("/v1/refunds")).map((call) => new URLSearchParams(call.body).get("payment_intent"));
+    expect(refunds).toEqual([`pi_${other}`]);
+  });
+
+  it("finishes a refund a failed request left undone", async () => {
+    await user("ada");
+    await grant("ada", "pro_life");
+    subscriptions();
+    let refunds = 0;
+    outbound.push((url, init) => {
+      if (url.pathname !== "/v1/refunds" || init.method !== "POST") return null;
+      refunds += 1;
+      return refunds === 1 ? Response.json({ error: { message: "Try again" } }, { status: 500 }) : Response.json({ id: "re_2" });
+    });
+    outbound.push((url) => (url.pathname === "/v1/checkout/sessions/cs_late" ? Response.json(yearly("cs_late", "sub_late")) : null));
+    await expect(fulfilCheckout(yearly("cs_late", "sub_late"), NOW)).rejects.toThrow();
+    const pending = () => env.DB.prepare(`SELECT pending, refunded_at FROM purchases WHERE id = 'cs_late'`).first();
+    expect(await pending()).toEqual({ pending: "refund", refunded_at: NOW });
+    await finishPendingPurchases(NOW + 3600);
+    expect(refunds).toBe(2);
+    expect(await pending()).toEqual({ pending: null, refunded_at: NOW });
+    // Done is done: neither the hourly run nor another delivery refunds again.
+    await finishPendingPurchases(NOW + 7200);
+    await fulfilCheckout(yearly("cs_late", "sub_late"), NOW + 7200);
+    expect(refunds).toBe(2);
   });
 
   it("takes back what a lost chargeback paid for", async () => {
@@ -327,7 +433,7 @@ describe("Pro settings", () => {
     );
     expect(saved.status).toBe(200);
     expect(saved.body.site).toMatchObject({ pixels: { google: "G-ABC1234", tiktok: "C4ABCDEFGHIJ" }, branding: false, pro_active: true });
-    expect(siteExtras((await siteByHandle(env.DB, "adapage"))!)).toEqual({
+    expect(siteExtras((await siteByHandle(env.DB, "adapage"))!, true)).toEqual({
       pixels: { google: "G-ABC1234", tiktok: "C4ABCDEFGHIJ" },
       branding: false,
       headers: { "X-Page-Pixels": "google tiktok" },
@@ -337,7 +443,7 @@ describe("Pro settings", () => {
     expect((await siteByHandle(env.DB, "adapage"))!.pixels).toEqual({ google: "G-ABC1234" });
 
     await env.DB.prepare(`UPDATE purchases SET ends_at = ?1`).bind(NOW - 1).run();
-    expect(siteExtras((await siteByHandle(env.DB, "adapage"))!)).toEqual({ pixels: null, branding: true, headers: {} });
+    expect(siteExtras((await siteByHandle(env.DB, "adapage"))!, true)).toEqual({ pixels: null, branding: true, headers: {} });
     // Turning them off needs no plan.
     expect((await answer(api(token, "PATCH", "sites/adapage", { pixels: { google: null }, branding: true }))).status).toBe(200);
   });
@@ -490,6 +596,91 @@ describe("own domains", () => {
     }
   });
 
+  /** Runs a test with Cloudflare for SaaS set up, its API answered by `cloudflareApi`. */
+  async function withSaas(cloudflareApi: Outbound, test: () => Promise<void>) {
+    const saved = { zone: env.CF_ZONE_ID, token: env.CF_API_TOKEN };
+    Object.assign(env, { CF_ZONE_ID: "zone1", CF_API_TOKEN: "token1" });
+    outbound.push((url, init) => (url.hostname === "api.cloudflare.com" ? cloudflareApi(url, init) : null));
+    try {
+      await test();
+    } finally {
+      Object.assign(env, { CF_ZONE_ID: saved.zone, CF_API_TOKEN: saved.token });
+    }
+  }
+  const hostnameAnswer = (id: string) => Response.json({ success: true, result: { id, status: "pending", ssl: { status: "pending_validation" } } });
+  const deletedAtCloudflare = () => sent.filter((call) => call.method === "DELETE" && call.url.includes("/custom_hostnames/")).map((call) => call.url.split("/").pop());
+
+  it("delete a hostname made while its domain was disconnected, unless a new claim holds it", async () => {
+    const token = await user("ada");
+    await api(token, "POST", "sites", { handle: "adapage", published: true });
+    await grant("ada", "domains");
+    const siteId = (await siteByHandle(env.DB, "adapage"))!.id;
+    dns["ada-lovelace.com"] = godaddy;
+    dns["www.ada-lovelace.com"] = {};
+    let duringCreate = async () => {};
+    await withSaas(
+      async (_url, init) => {
+        if (init.method === "POST") await duringCreate();
+        return hostnameAnswer("ch_1");
+      },
+      async () => {
+        const point = async () => {
+          const claimed = await answer<{ domain: { records: Array<{ value: string }> } }>(
+            api(token, "PUT", "sites/adapage/domain", { hostname: "www.ada-lovelace.com" }),
+          );
+          dns["www.ada-lovelace.com"] = { CNAME: [`${claimed.body.domain.records[0]!.value}.`] };
+          return (await domainOf(env.DB, siteId))!;
+        };
+        // The owner disconnects while Cloudflare is making the hostname.
+        const first = await point();
+        duringCreate = async () => {
+          expect((await api(token, "DELETE", "sites/adapage/domain")).status).toBe(200);
+        };
+        await checkDomain(first, NOW, true, true);
+        expect(await domainOf(env.DB, siteId)).toBeNull();
+        expect(deletedAtCloudflare()).toEqual(["ch_1"]);
+
+        // Disconnected and connected again: the new claim already holds the
+        // same name's hostname, so the old check leaves it.
+        sent.length = 0;
+        dns["www.ada-lovelace.com"] = {};
+        const second = await point();
+        duringCreate = async () => {
+          await api(token, "DELETE", "sites/adapage/domain");
+          await point();
+          await env.DB.prepare(`UPDATE domains SET cf_id = 'ch_1' WHERE site_id = ?1`).bind(siteId).run();
+        };
+        await checkDomain(second, NOW, true, true);
+        expect(deletedAtCloudflare()).toEqual([]);
+        expect((await domainOf(env.DB, siteId))!.cfId).toBe("ch_1");
+      },
+    );
+  });
+
+  it("keep a hostname two claims share until the last lets it go", async () => {
+    const ada = await user("ada");
+    const bob = await user("bob");
+    await grant("ada", "domains");
+    await grant("bob", "domains");
+    await api(ada, "POST", "sites", { handle: "adapage", published: true });
+    await api(bob, "POST", "sites", { handle: "bobpage", published: true });
+    dns["ada-lovelace.com"] = godaddy;
+    dns["www.ada-lovelace.com"] = {};
+    await withSaas(
+      () => Response.json({ success: true, result: { id: "ch_1" } }),
+      async () => {
+        await api(ada, "PUT", "sites/adapage/domain", { hostname: "www.ada-lovelace.com" });
+        await api(bob, "PUT", "sites/bobpage/domain", { hostname: "www.ada-lovelace.com" });
+        // Both waiting claims found Cloudflare's one hostname for the name.
+        await env.DB.prepare(`UPDATE domains SET cf_id = 'ch_1'`).run();
+        expect((await api(bob, "DELETE", "sites/bobpage/domain")).status).toBe(200);
+        expect(deletedAtCloudflare()).toEqual([]);
+        expect((await api(ada, "DELETE", "sites/adapage/domain")).status).toBe(200);
+        expect(deletedAtCloudflare()).toEqual(["ch_1"]);
+      },
+    );
+  });
+
   it("connects a root domain at Cloudflare by its TXT record", async () => {
     const token = await user("ada");
     await api(token, "POST", "sites", { handle: "adapage", published: true });
@@ -564,6 +755,25 @@ describe("subpages", () => {
     // Deleting still works without Pro.
     expect((await answer(api(token, "DELETE", `sites/adapage/pages/${page.id}`))).status).toBe(200);
     expect((await answer<{ pages: Sub[] }>(api(token, "GET", "sites/adapage/pages"))).body.pages).toEqual([]);
+  });
+
+  it("load the site's pixels at their public address only, never at a private link", async () => {
+    const token = await user("ada");
+    await grant("ada", "pro_life");
+    await api(token, "POST", "sites", { handle: "adapage", title: "Ada", published: true, pixels: { google: "G-ABC1234" } });
+    await api(token, "PATCH", "sites/adapage", { pixels: { google: "G-ABC1234" } });
+    const made = await answer<{ page: Sub }>(api(token, "POST", "sites/adapage/pages", { title: "Notes", path: "notes" }));
+    const privateId = made.body.page.private_url.split("/").pop()!;
+    const view = async (segment: string) => {
+      const result = (await subpageLoader({
+        params: { handle: "adapage", sub: segment },
+        url: new URL(`${ORIGIN}/adapage/${segment}`),
+        context: {},
+      } as never)) as unknown as { data: { pixels: unknown }; init: { headers?: Record<string, string> } };
+      return { pixels: result.data.pixels, header: result.init.headers?.["X-Page-Pixels"] ?? null };
+    };
+    expect(await view("notes")).toEqual({ pixels: { google: "G-ABC1234" }, header: "google" });
+    expect(await view(privateId)).toEqual({ pixels: null, header: null });
   });
 });
 

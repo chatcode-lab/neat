@@ -203,6 +203,13 @@ Decided 2026-11-25:
   that end. A full refund or a lost chargeback of a one-time payment takes
   it back, also when Stripe told of it before the purchase was recorded.
   Buying Pro for life stops the yearly plan renewing.
+- **Both at once**: the webhook and the owner's return often arrive
+  together. The one statement that records a purchase also decides whether
+  the account already had what it gives, so two requests for one session
+  record it once and never take it for a duplicate. What is still to be
+  done at Stripe (a duplicate's refund, stopping the yearly plan) is kept on
+  the row and done by one request at a time; one that fails half way is
+  finished by the next delivery or the hourly job.
 - **No paying twice**: an account has one open Checkout Session; starting
   another expires the one before. A payment that still arrives for
   something the account already has is refunded at once (a duplicate
@@ -217,7 +224,9 @@ Decided 2026-11-25:
   `start_checkout`) gives a Checkout link for the owner to open. An
   unentitled request answers 402 `plan_required`, naming the plan and price.
 - Billing portal (invoices, card, cancelling at the year's end) from the
-  Plan page or `POST /api/v1/billing`.
+  Plan page only, for the owner signed in. An app's token never opens it:
+  it shows invoices and can cancel the plan, which connecting an app
+  never agreed to.
 - No credit from one plan to another, for now: Own domain then Pro pays
   both.
 

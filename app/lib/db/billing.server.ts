@@ -1,4 +1,4 @@
-import { type Plan, planOf, type Product } from "../plans";
+import { COVERED_BY, type Plan, planOf, type Product } from "../plans";
 
 /** A purchase gives its features while this holds: not refunded, and not past its end. */
 export const RUNNING = `refunded_at IS NULL AND (ends_at IS NULL OR ends_at > unixepoch())`;
@@ -91,8 +91,8 @@ export interface NewPurchase {
   amount: number;
   currency: string;
   endsAt: number | null;
-  /** Set when it was refunded before it was recorded, or was a duplicate refunded at once. */
-  refundedAt?: number | null;
+  /** The payment was refunded, or lost to a chargeback, before it was recorded. */
+  takenBack: boolean;
   now: number;
 }
 
@@ -100,12 +100,27 @@ export async function purchaseExists(db: D1Database, id: string): Promise<boolea
   return Boolean(await db.prepare(`SELECT 1 FROM purchases WHERE id = ?1`).bind(id).first());
 }
 
-/** Records a purchase once; Stripe may tell of it more than once. True when it is new. */
-export async function recordPurchase(db: D1Database, purchase: NewPurchase): Promise<boolean> {
-  const result = await db
+/**
+ * Records a purchase once, however many requests tell of it at the same
+ * time. The one statement that records it also decides whether the account
+ * already had what it gives (two payment links paid): then it is recorded
+ * refunded, with the refund still to make. True when this request recorded
+ * it and it gives the account something.
+ */
+export async function claimPurchase(db: D1Database, purchase: NewPurchase): Promise<boolean> {
+  const covering = COVERED_BY[purchase.product].map((product) => `'${product}'`).join(", ");
+  const row = await db
     .prepare(
-      `INSERT INTO purchases (id, user_id, product, customer_id, subscription_id, payment_intent_id, amount, currency, created_at, ends_at, refunded_at)
-       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11) ON CONFLICT DO NOTHING`,
+      `WITH earlier AS (
+         SELECT EXISTS (SELECT 1 FROM purchases WHERE user_id = ?2 AND product IN (${covering}) AND ${RUNNING}) AS covered
+       )
+       INSERT INTO purchases (id, user_id, product, customer_id, subscription_id, payment_intent_id, amount, currency, created_at, ends_at, refunded_at, pending)
+       SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10,
+         CASE WHEN ?11 OR covered THEN ?9 END,
+         CASE WHEN ?11 THEN NULL WHEN covered THEN 'refund' WHEN ?3 = 'pro_life' THEN 'stop_yearly' END
+       FROM earlier WHERE true
+       ON CONFLICT DO NOTHING
+       RETURNING refunded_at`,
     )
     .bind(
       purchase.id,
@@ -118,10 +133,46 @@ export async function recordPurchase(db: D1Database, purchase: NewPurchase): Pro
       purchase.currency,
       purchase.now,
       purchase.endsAt,
-      purchase.refundedAt ?? null,
+      purchase.takenBack ? 1 : 0,
     )
+    .first<{ refunded_at: number | null }>();
+  return row !== null && row.refunded_at === null;
+}
+
+/** How long a request may take to make a purchase's Stripe calls before another may try. */
+const PENDING_LOCK_SECONDS = 120;
+
+/** Takes on what is still to be done at Stripe for a purchase, unless done or another request has it. */
+export async function takePending(db: D1Database, id: string, now: number): Promise<"refund" | "stop_yearly" | null> {
+  const row = await db
+    .prepare(
+      `UPDATE purchases SET pending_lock = ?2
+       WHERE id = ?1 AND pending IS NOT NULL AND coalesce(pending_lock, 0) <= ?2 - ${PENDING_LOCK_SECONDS}
+       RETURNING pending`,
+    )
+    .bind(id, now)
+    .first<{ pending: "refund" | "stop_yearly" }>();
+  return row?.pending ?? null;
+}
+
+/** What was still to be done for a purchase is done; or, when `done` is false, failed and may be tried again. */
+export async function endPending(db: D1Database, id: string, done: boolean): Promise<void> {
+  await db
+    .prepare(done ? `UPDATE purchases SET pending = NULL, pending_lock = NULL WHERE id = ?1` : `UPDATE purchases SET pending_lock = NULL WHERE id = ?1`)
+    .bind(id)
     .run();
-  return result.meta.changes > 0;
+}
+
+/** Checkout Sessions whose Stripe calls were left undone, for the hourly run to finish. */
+export async function unfinishedPurchases(db: D1Database, now: number, limit: number): Promise<string[]> {
+  const { results } = await db
+    .prepare(
+      `SELECT id FROM purchases WHERE pending IS NOT NULL AND coalesce(pending_lock, 0) <= ?1 - ${PENDING_LOCK_SECONDS}
+       AND substr(id, 1, 3) = 'cs_' ORDER BY created_at LIMIT ?2`,
+    )
+    .bind(now, limit)
+    .all<{ id: string }>();
+  return results.map((row) => row.id);
 }
 
 /** The account's Checkout Session still open, if any, replaced by a new one. */

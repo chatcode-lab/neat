@@ -2,6 +2,7 @@ import { env } from "cloudflare:workers";
 import { createRequestHandler, RouterContextProvider } from "react-router";
 
 import { nonceContext, viewerContext, waitUntilContext } from "../app/context";
+import { finishPendingPurchases } from "../app/lib/billing.server";
 import { enforcePublishLimits } from "../app/lib/db/billing.server";
 import { connectedDomain, ownershipAnswer } from "../app/lib/db/domains.server";
 import { publicSubpages } from "../app/lib/db/subpages.server";
@@ -290,7 +291,8 @@ export default {
 
   // Hourly: forgets expired OAuth codes and unused apps, expired sign-in and
   // linking tokens, and expired sessions; takes pages past an ended plan's
-  // limit back to drafts; checks domains waiting for DNS and connected ones.
+  // limit back to drafts; finishes refunds and cancellations a payment left
+  // undone; checks domains waiting for DNS and connected ones.
   async scheduled(_controller, workerEnv, ctx) {
     const now = Math.floor(Date.now() / 1000);
     const run = (job: string, work: Promise<unknown>) =>
@@ -301,6 +303,7 @@ export default {
       "enforcePublishLimits",
       enforcePublishLimits(workerEnv.DB, now, { free: PLAN_LIMITS.free.published, domains: PLAN_LIMITS.domains.published, pro: PLAN_LIMITS.pro.published }),
     );
+    run("finishPendingPurchases", finishPendingPurchases(now));
     run("checkDomains", checkDomains(now));
     run(
       "sweepSessions",

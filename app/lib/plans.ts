@@ -87,13 +87,16 @@ export function productFor(feature: Feature): Product {
   return feature === "domains" ? "domains" : "pro_year";
 }
 
+/** The products that already give everything a product would. */
+export const COVERED_BY: Record<Product, readonly Product[]> = {
+  domains: ["domains", "pro_year", "pro_life"],
+  pro_year: ["pro_year", "pro_life"],
+  pro_life: ["pro_life"],
+};
+
 /** Whether buying a product would add anything to what an account has. */
 export function canBuy(product: Product, running: readonly string[]): boolean {
-  if (running.includes("pro_life")) return false;
-  if (product === "pro_life") return true;
-  if (running.includes("pro_year")) return false;
-  if (product === "domains") return !running.includes("domains");
-  return true;
+  return !COVERED_BY[product].some((other) => running.includes(other));
 }
 
 /** "$10", "$50": a price as people read it. */
