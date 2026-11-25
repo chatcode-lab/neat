@@ -11,6 +11,8 @@ describe("page cache", () => {
   it("keys pages for visitors without an account by theme and build, not query", () => {
     expect(key("/adalove?utm_source=x")).toBe("https://neat.link/__page/b1/adalove?theme=system");
     expect(key("/", { headers: { Cookie: "theme=dark" } })).toBe("https://neat.link/__page/b1/?theme=dark");
+    // A subpage, public or private.
+    expect(key("/adalove/how-i-made-it")).toBe("https://neat.link/__page/b1/adalove/how-i-made-it?theme=system");
   });
 
   it("leaves out signed-in visitors, writes, data requests and other addresses", () => {
@@ -19,7 +21,9 @@ describe("page cache", () => {
     expect(key("/adalove.data")).toBeNull();
     expect(key("/adalove.md")).toBeNull();
     expect(key("/app/settings")).toBeNull();
+    expect(key("/api/v1")).toBeNull();
     expect(key("/AdaLove")).toBeNull();
+    expect(key("/adalove/a/b")).toBeNull();
   });
 
   it("keeps only complete static pages that set no cookie", () => {

@@ -29,10 +29,19 @@
 		// /media/<key>, as in local development and tests.
 		"MEDIA_ORIGIN": "",
 		// The bot users talk to and that signs Telegram logins. Its token is a secret.
-		"TELEGRAM_BOT_USERNAME": "neatlink_bot"
+		"TELEGRAM_BOT_USERNAME": "neatlink_bot",
+		// Owners' domains point a CNAME at <code>.DOMAIN_TARGET, a wildcard in
+		// neat.link's zone. With CF_ZONE_ID and the CF_API_TOKEN secret, each
+		// becomes a Cloudflare for SaaS custom hostname on that zone once its
+		// DNS points here; without them (here, staging) none is made.
+		"DOMAIN_TARGET": "byo.neat.link",
+		"CF_ZONE_ID": ""
 	},
 	// Set with `npm run secret:production -- <NAME>`, and in .dev.vars locally
-	// (see .dev.vars.example). A deploy fails while any is missing.
+	// (see .dev.vars.example). A deploy fails while any is missing. Stripe's
+	// key is the test one everywhere but production, and its webhook secret is
+	// the endpoint's own (`npm run stripe:setup`). CF_API_TOKEN is optional:
+	// production's, for custom hostnames (Zone, SSL and Certificates, Edit).
 	"secrets": {
 		"required": [
 			"BETTER_AUTH_SECRET",
@@ -40,7 +49,9 @@
 			"GOOGLE_CLIENT_SECRET",
 			"TELEGRAM_BOT_TOKEN",
 			"TELEGRAM_CLIENT_SECRET",
-			"TELEGRAM_WEBHOOK_SECRET"
+			"TELEGRAM_WEBHOOK_SECRET",
+			"STRIPE_SECRET_KEY",
+			"STRIPE_WEBHOOK_SECRET"
 		]
 	},
 	"d1_databases": [
@@ -90,7 +101,9 @@
 				"ENVIRONMENT": "staging",
 				"APP_ORIGIN": "",
 				"MEDIA_ORIGIN": "",
-				"TELEGRAM_BOT_USERNAME": "NeatLinkBot"
+				"TELEGRAM_BOT_USERNAME": "NeatLinkBot",
+				"DOMAIN_TARGET": "byo.neat.link",
+				"CF_ZONE_ID": ""
 			},
 			"secrets": {
 				"required": [
@@ -99,7 +112,9 @@
 					"GOOGLE_CLIENT_SECRET",
 					"TELEGRAM_BOT_TOKEN",
 					"TELEGRAM_CLIENT_SECRET",
-					"TELEGRAM_WEBHOOK_SECRET"
+					"TELEGRAM_WEBHOOK_SECRET",
+					"STRIPE_SECRET_KEY",
+					"STRIPE_WEBHOOK_SECRET"
 				]
 			},
 			"d1_databases": [
@@ -153,7 +168,10 @@
 				"ENVIRONMENT": "production",
 				"APP_ORIGIN": "https://neat.link",
 				"MEDIA_ORIGIN": "https://media.neat.link",
-				"TELEGRAM_BOT_USERNAME": "neatlink_bot"
+				"TELEGRAM_BOT_USERNAME": "neatlink_bot",
+				"DOMAIN_TARGET": "byo.neat.link",
+				// neat.link's zone, where owners' domains become custom hostnames.
+				"CF_ZONE_ID": "388db4ea5ba694290458deaffebf4748"
 			},
 			"secrets": {
 				"required": [
@@ -162,7 +180,9 @@
 					"GOOGLE_CLIENT_SECRET",
 					"TELEGRAM_BOT_TOKEN",
 					"TELEGRAM_CLIENT_SECRET",
-					"TELEGRAM_WEBHOOK_SECRET"
+					"TELEGRAM_WEBHOOK_SECRET",
+					"STRIPE_SECRET_KEY",
+					"STRIPE_WEBHOOK_SECRET"
 				]
 			},
 			"d1_databases": [

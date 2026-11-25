@@ -1,17 +1,51 @@
 import MarkdownIt from "markdown-it";
 
+import { embedKind } from "./files";
+
 /** The longest body a page keeps, in characters. */
 export const MAX_BODY_LENGTH = 10_000;
+
+/** The longest body a subpage (an article) keeps, in characters. */
+export const MAX_ARTICLE_LENGTH = 100_000;
 
 /**
  * Page bodies are CommonMark with strikethrough and bare links made
  * clickable. Raw HTML is never rendered, and markdown-it's own link check
  * refuses javascript:, vbscript:, file: and data: addresses. A line break
  * in the text is a line break on the page, as people expect from a bio.
- * Pictures are left as text for now: pages may not load images from other
- * sites (see the plan's security baseline).
+ * Pictures (`![words](address)`) show only when they are files uploaded to
+ * neat.link: a picture, a video or audio player, or a link to a PDF. Any
+ * other address is a link with the words: pages never load anything from
+ * other sites (see the plan's security baseline).
  */
-const renderer = new MarkdownIt({ html: false, linkify: true, breaks: true, typographer: false }).disable(["image"]);
+const renderer = new MarkdownIt({ html: false, linkify: true, breaks: true, typographer: false });
+const escape = renderer.utils.escapeHtml;
+
+interface RenderEnv {
+  /** Where uploaded files are served from (see filesPrefix); only those are embedded. */
+  filesPrefix?: string;
+}
+
+renderer.renderer.rules.image = (tokens, index, options, env: RenderEnv, self) => {
+  const token = tokens[index]!;
+  const src = token.attrGet("src") ?? "";
+  const words = self.renderInlineAsText(token.children ?? [], options, env);
+  const rest = env.filesPrefix && src.startsWith(env.filesPrefix) ? src.slice(env.filesPrefix.length) : null;
+  const kind = rest !== null && /^[A-Za-z0-9]{24}\/[a-z0-9.-]+$/.test(rest) ? embedKind(rest) : null;
+  const address = escape(src);
+  switch (kind) {
+    case "image":
+      return `<img src="${address}" alt="${escape(words)}" loading="lazy" decoding="async">`;
+    case "video":
+      return `<video src="${address}" controls preload="metadata" playsinline${words ? ` title="${escape(words)}"` : ""}></video>`;
+    case "audio":
+      return `<audio src="${address}" controls preload="metadata"${words ? ` title="${escape(words)}"` : ""}></audio>`;
+    case "pdf":
+      return `<a href="${address}" target="_blank" rel="noopener">${escape(words || "PDF")}</a>`;
+    default:
+      return `<a href="${address}" target="_blank" rel="nofollow ugc noopener">${escape(words || src)}</a>`;
+  }
+};
 
 const defaultLinkOpen =
   renderer.renderer.rules.link_open ??
@@ -29,9 +63,12 @@ renderer.renderer.rules.link_open = (tokens, index, options, env, self) => {
   return defaultLinkOpen(tokens, index, options, env, self);
 };
 
-/** A page body as HTML, safe to put in the page as it is. */
-export function renderMarkdown(source: string): string {
-  return renderer.render(source);
+/**
+ * A page body as HTML, safe to put in the page as it is. `filesPrefix` is
+ * where uploaded files are served from, so they can be embedded.
+ */
+export function renderMarkdown(source: string, options: RenderEnv = {}): string {
+  return renderer.render(source, { ...options });
 }
 
 /**

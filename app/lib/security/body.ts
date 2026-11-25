@@ -102,7 +102,11 @@ export const BODY_LIMIT = 512 * 1024;
 /** Picture uploads: the editor's form and the API's picture endpoint, 8 MB and a margin. */
 export const UPLOAD_BODY_LIMIT = 8 * 1024 * 1024 + 128 * 1024;
 
+/** Files for pages, sent to the API or an upload link: 25 MB and a margin. */
+export const FILE_BODY_LIMIT = 25 * 1024 * 1024 + 128 * 1024;
+
 const UPLOAD_PATHS = [/^\/app\/sites\/[^/]+(?:\.data)?$/, /^\/api\/v1\/sites\/[^/]+\/picture$/];
+const FILE_PATHS = [/^\/api\/v1\/media$/, /^\/api\/v1\/media\/upload\/[^/]+$/];
 
 /** The name of the error a reader of a body over its limit gets. */
 export const BODY_OVER_LIMIT = "BodyOverLimit";
@@ -114,6 +118,7 @@ export const BODY_OVER_LIMIT = "BodyOverLimit";
  */
 export function bodyLimit(pathname: string): number {
   const path = pathname.replace(/\/{2,}/g, "/").replace(/(.)\/+$/, "$1");
+  if (FILE_PATHS.some((pattern) => pattern.test(path))) return FILE_BODY_LIMIT;
   return UPLOAD_PATHS.some((pattern) => pattern.test(path)) ? UPLOAD_BODY_LIMIT : BODY_LIMIT;
 }
 

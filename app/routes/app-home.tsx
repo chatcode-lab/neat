@@ -2,8 +2,9 @@ import { env } from "cloudflare:workers";
 import { ExternalLink, Pencil, Plus } from "lucide-react";
 import { Link } from "react-router";
 
-import { MAX_SITES } from "~/lib/db/sites.server";
+import { accountPlan } from "~/lib/billing.server";
 import { mediaUrl } from "~/lib/media.server";
+import { PLAN_LIMITS } from "~/lib/plans";
 import { privateMeta } from "~/lib/meta";
 import { listSites } from "~/lib/sites.server";
 import { requireAccount } from "~/lib/viewer.server";
@@ -16,12 +17,15 @@ export function meta() {
 
 export async function loader({ request, url, context }: Route.LoaderArgs) {
   const account = await requireAccount(request, context);
-  const sites = await listSites(account);
+  const [sites, { plan }] = await Promise.all([listSites(account), accountPlan(account)]);
+  const limits = PLAN_LIMITS[plan];
   return {
     host: url.host,
     welcome: url.searchParams.has("welcome"),
-    canCreate: sites.length < MAX_SITES,
-    maxSites: MAX_SITES,
+    canCreate: sites.length < limits.sites,
+    limits,
+    published: sites.filter((site) => site.published).length,
+    pro: plan === "pro",
     telegramLinked: Boolean(account.telegram),
     bot: env.TELEGRAM_BOT_USERNAME,
     sites: sites.map((site) => ({
@@ -84,8 +88,19 @@ export default function MyPages({ loaderData }: Route.ComponentProps) {
           ))}
         </ul>
       )}
-      {!loaderData.canCreate ? (
-        <p className="text-sm text-text-faint">An account has up to {loaderData.maxSites} pages for now.</p>
+      {sites.length > 0 ? (
+        <p className="text-sm text-text-faint">
+          {loaderData.published} of {loaderData.limits.published} published, {sites.length} of {loaderData.limits.sites} pages in all.
+          {loaderData.pro ? null : (
+            <>
+              {" "}
+              <Link className="text-link" to="/app/plan">
+                Pro
+              </Link>{" "}
+              has room for 10, with own domains, subpages and more.
+            </>
+          )}
+        </p>
       ) : null}
       {!loaderData.telegramLinked ? (
         <p className="text-sm text-text-muted">

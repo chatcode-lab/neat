@@ -1,13 +1,21 @@
+import { env } from "cloudflare:workers";
 import { ArrowUp, ExternalLink, ImageUp, Plus, Trash2, X } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
 import { Form, redirect, useActionData, useNavigation, useSubmit } from "react-router";
 
 import { PageCard } from "~/components/page-card";
+import { DomainPanel, ProPanel, SubpagesPanel } from "~/components/site-settings";
 import { MAX_BUTTONS, normalizeButtonUrl, type PageButton } from "~/lib/buttons";
+import { domainOf } from "~/lib/db/domains.server";
+import { subpagesOf } from "~/lib/db/subpages.server";
+import { checkDomainFor, domainJson, removeDomainFor, setDomainFor } from "~/lib/domain-setup.server";
+import { subpageUrl } from "~/lib/domains";
 import { MAX_HEADLINE_LENGTH, MAX_TITLE_LENGTH } from "~/lib/limits";
 import { MAX_BODY_LENGTH, renderMarkdown } from "~/lib/markdown";
-import { MAX_UPLOAD_BYTES, mediaUrl } from "~/lib/media.server";
+import { filesPrefix, MAX_UPLOAD_BYTES, mediaUrl } from "~/lib/media.server";
 import { privateMeta } from "~/lib/meta";
+import { PIXEL_VENDOR_IDS } from "~/lib/pixels";
+import { allows } from "~/lib/plans";
 import { RATE_LIMITED_MESSAGE, withinLimits } from "~/lib/security/rate-limit.server";
 import {
   deleteSiteFor,
@@ -34,6 +42,7 @@ export async function loader({ request, url, params, context }: Route.LoaderArgs
     if (error instanceof Refusal) throw new Response("Not Found", { status: 404 });
     throw error;
   }
+  const [domain, subpages] = await Promise.all([domainOf(env.DB, site.id), subpagesOf(env.DB, site.id)]);
   return {
     host: url.host,
     created: url.searchParams.has("created"),
@@ -44,11 +53,25 @@ export async function loader({ request, url, params, context }: Route.LoaderArgs
     body: site.page.body,
     buttons: site.page.buttons,
     picture: site.page.imageKey ? mediaUrl(site.page.imageKey, url.origin) : null,
+    filesPrefix: filesPrefix(url.origin),
+    domain: domain ? domainJson(domain) : null,
+    pixels: site.pixels,
+    branding: site.branding,
+    allows: { domains: allows(site.ownerPlan, "domains"), pro: allows(site.ownerPlan, "pixels") },
+    subpages: subpages.map((page) => ({
+      id: page.id,
+      title: page.title,
+      url: page.path ? subpageUrl(site, page.path, url.origin) : null,
+      privateUrl: subpageUrl(site, page.privateId, url.origin),
+    })),
   };
 }
 
-/** `saved` marks a content save, after which the editor shows the page as stored. */
-type ActionResult = { ok: true; message: string; saved?: true } | { error: string };
+/**
+ * `saved` marks a content save, after which the editor shows the page as
+ * stored; `quiet` a result the page does not announce, as a domain check.
+ */
+type ActionResult = { ok: true; message: string; saved?: true; quiet?: true } | { error: string };
 
 export async function action({ request, url, params, context }: Route.ActionArgs): Promise<ActionResult | Response> {
   const account = await requireAccount(request, context);
@@ -98,6 +121,22 @@ export async function action({ request, url, params, context }: Route.ActionArgs
       case "remove_picture":
         await removePictureFor(account, params.handle, now);
         return { ok: true, message: "Picture removed." };
+      case "set_domain": {
+        const domain = await setDomainFor(account, params.handle, String(form.get("hostname") ?? ""), now, url.origin);
+        return { ok: true, message: domain.status === "pending" ? `Now add the DNS records below for ${domain.hostname}.` : `${domain.hostname} is connected.` };
+      }
+      case "check_domain": {
+        const domain = await checkDomainFor(account, params.handle, now, url.origin);
+        return { ok: true, message: domain.status === "pending" ? "Not pointing here yet. DNS changes can take a while to show." : `${domain.hostname} is connected.`, quiet: true };
+      }
+      case "remove_domain":
+        await removeDomainFor(account, params.handle);
+        return { ok: true, message: "Domain disconnected. The page stays at its neat.link address." };
+      case "save_pro": {
+        const pixels = Object.fromEntries(PIXEL_VENDOR_IDS.map((vendor) => [vendor, String(form.get(`pixel_${vendor}`) ?? "")]));
+        await updateSiteFor(account, params.handle, { pixels, branding: form.get("branding") === "on" }, now);
+        return { ok: true, message: "Saved." };
+      }
       case "delete": {
         if (String(form.get("confirm") ?? "").trim().toLowerCase() !== params.handle.toLowerCase()) {
           return { error: `Type ${params.handle} to confirm.` };
@@ -164,14 +203,14 @@ export default function EditSite({ loaderData }: Route.ComponentProps) {
     () => ({
       title: title || "Your name",
       headline,
-      bodyHtml: renderMarkdown(body),
+      bodyHtml: renderMarkdown(body, { filesPrefix: loaderData.filesPrefix }),
       buttons: rows.flatMap(({ label, url }) => {
         const href = label.trim() ? normalizeButtonUrl(url) : null;
         return href ? [{ label: label.trim(), url: href }] : [];
       }),
       picture: loaderData.picture,
     }),
-    [title, headline, body, rows, loaderData.picture],
+    [title, headline, body, rows, loaderData.picture, loaderData.filesPrefix],
   );
 
   const update = (key: number, field: "label" | "url", value: string) =>
@@ -212,7 +251,7 @@ export default function EditSite({ loaderData }: Route.ComponentProps) {
         {loaderData.created ? (
           <p className="rounded bg-accent-soft px-4 py-3 text-sm">Your page is ready as a draft. Fill it in, save, then publish.</p>
         ) : null}
-        {result ? (
+        {result && !("quiet" in result) ? (
           <p
             role={"error" in result ? "alert" : "status"}
             className={`rounded px-4 py-3 text-sm ${"error" in result ? "bg-danger-soft text-danger" : "bg-accent-soft text-text"}`}
@@ -344,6 +383,10 @@ export default function EditSite({ loaderData }: Route.ComponentProps) {
             </span>
           </div>
         </Form>
+
+        <DomainPanel domain={loaderData.domain} allowed={loaderData.allows.domains} busy={busy} />
+        <ProPanel pixels={loaderData.pixels} branding={loaderData.branding} allowed={loaderData.allows.pro} busy={busy} />
+        <SubpagesPanel subpages={loaderData.subpages} allowed={loaderData.allows.pro} />
 
         <details className="rounded-md border border-border px-4 py-3">
           <summary className="cursor-pointer font-medium">Address and deletion</summary>
