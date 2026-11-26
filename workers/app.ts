@@ -58,6 +58,7 @@ async function cachedPage(ctx: ExecutionContext, key: string, render: () => Prom
     const headers = new Headers({ "Content-Type": response.headers.get("Content-Type") ?? "text/html" });
     const pixels = response.headers.get(PIXELS_HEADER);
     if (pixels) headers.set(PIXELS_HEADER, pixels);
+    if (response.headers.get("Referrer-Policy") === "no-referrer") headers.set("Referrer-Policy", "no-referrer");
     return headers;
   };
   if (hit) return new Response(hit.body, { headers: kept(hit) });

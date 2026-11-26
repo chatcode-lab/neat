@@ -43,12 +43,17 @@ export async function loader({ params, url, context }: Route.LoaderArgs) {
 
   const { page, via } = found;
   const origin = url.origin;
+  // A private link's address lets one in: no link or request from it says
+  // where it came from, so it never reaches another site, nor analytics as
+  // the referrer of the site's own page.
+  const unlisted = via === "private";
   // Pixels only at the public address: a private one would reach analytics.
   const extras = siteExtras(site, visible && via === "path");
   const address = subpageUrl(site, segment, origin);
   return data(
     {
       visible,
+      unlisted,
       // Only the public address is indexed; the private one is shared by link.
       indexable: visible && via === "path",
       origin,
@@ -72,7 +77,7 @@ export async function loader({ params, url, context }: Route.LoaderArgs) {
         updated: new Date(page.updatedAt * 1000).toISOString(),
       },
     },
-    { headers: extras.headers },
+    { headers: unlisted ? { ...extras.headers, "Referrer-Policy": "no-referrer" } : extras.headers },
   );
 }
 
@@ -82,14 +87,18 @@ export function headers({ loaderHeaders }: Route.HeadersArgs) {
 
 export function meta({ loaderData }: Route.MetaArgs) {
   if (!loaderData) return [{ title: "Not found · neat.link" }];
-  return pageMeta({
-    title: `${loaderData.page.title} · ${loaderData.site.title}`,
-    description: loaderData.description,
-    url: loaderData.url,
-    image: loaderData.cover,
-    markdown: loaderData.markdown,
-    noindex: !loaderData.indexable,
-  });
+  return [
+    ...pageMeta({
+      title: `${loaderData.page.title} · ${loaderData.site.title}`,
+      description: loaderData.description,
+      url: loaderData.url,
+      image: loaderData.cover,
+      markdown: loaderData.markdown,
+      noindex: !loaderData.indexable,
+    }),
+    // Also in the page itself, which the edge cache keeps as it is.
+    ...(loaderData.unlisted ? [{ name: "referrer", content: "no-referrer" }] : []),
+  ];
 }
 
 export default function Subpage({ loaderData }: Route.ComponentProps) {

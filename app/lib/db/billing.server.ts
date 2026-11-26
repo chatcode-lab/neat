@@ -142,32 +142,52 @@ export async function claimPurchase(db: D1Database, purchase: NewPurchase): Prom
 /** How long a request may take to make a purchase's Stripe calls before another may try. */
 const PENDING_LOCK_SECONDS = 120;
 
+export interface PendingWork {
+  pending: "refund" | "stop_yearly";
+  /** Set when the purchase was taken back since; then its work is moot. */
+  refundedAt: number | null;
+  /** The duplicate's refund, once made. */
+  refundId: string | null;
+}
+
 /** Takes on what is still to be done at Stripe for a purchase, unless done or another request has it. */
-export async function takePending(db: D1Database, id: string, now: number): Promise<"refund" | "stop_yearly" | null> {
+export async function takePending(db: D1Database, id: string, now: number): Promise<PendingWork | null> {
   const row = await db
     .prepare(
       `UPDATE purchases SET pending_lock = ?2
-       WHERE id = ?1 AND pending IS NOT NULL AND coalesce(pending_lock, 0) <= ?2 - ${PENDING_LOCK_SECONDS}
-       RETURNING pending`,
+       WHERE id = ?1 AND pending IN ('refund', 'stop_yearly') AND coalesce(pending_lock, 0) <= ?2 - ${PENDING_LOCK_SECONDS}
+       RETURNING pending, refunded_at, refund_id`,
     )
     .bind(id, now)
-    .first<{ pending: "refund" | "stop_yearly" }>();
-  return row?.pending ?? null;
+    .first<{ pending: "refund" | "stop_yearly"; refunded_at: number | null; refund_id: string | null }>();
+  return row ? { pending: row.pending, refundedAt: row.refunded_at, refundId: row.refund_id } : null;
 }
 
-/** What was still to be done for a purchase is done; or, when `done` is false, failed and may be tried again. */
-export async function endPending(db: D1Database, id: string, done: boolean): Promise<void> {
-  await db
-    .prepare(done ? `UPDATE purchases SET pending = NULL, pending_lock = NULL WHERE id = ?1` : `UPDATE purchases SET pending_lock = NULL WHERE id = ?1`)
-    .bind(id)
-    .run();
+/** Remembers the refund made for a duplicate, so a retry follows it rather than making another. */
+export async function saveRefundId(db: D1Database, id: string, refundId: string): Promise<void> {
+  await db.prepare(`UPDATE purchases SET refund_id = ?2 WHERE id = ?1`).bind(id, refundId).run();
 }
 
-/** Checkout Sessions whose Stripe calls were left undone, for the hourly run to finish. */
+/**
+ * Ends a request's turn at a purchase's Stripe work: "done"; "retry" when
+ * it failed or Stripe is still working on it, for the next delivery or the
+ * hourly run; "failed" when Stripe could not refund, for someone to pay the
+ * owner back by hand.
+ */
+export async function endPending(db: D1Database, id: string, outcome: "done" | "retry" | "failed"): Promise<void> {
+  const statement = {
+    done: `UPDATE purchases SET pending = NULL, pending_lock = NULL WHERE id = ?1`,
+    retry: `UPDATE purchases SET pending_lock = NULL WHERE id = ?1`,
+    failed: `UPDATE purchases SET pending = 'refund_failed', pending_lock = NULL WHERE id = ?1`,
+  }[outcome];
+  await db.prepare(statement).bind(id).run();
+}
+
+/** Checkout Sessions whose Stripe calls were left undone or are still settling, for the hourly run. */
 export async function unfinishedPurchases(db: D1Database, now: number, limit: number): Promise<string[]> {
   const { results } = await db
     .prepare(
-      `SELECT id FROM purchases WHERE pending IS NOT NULL AND coalesce(pending_lock, 0) <= ?1 - ${PENDING_LOCK_SECONDS}
+      `SELECT id FROM purchases WHERE pending IN ('refund', 'stop_yearly') AND coalesce(pending_lock, 0) <= ?1 - ${PENDING_LOCK_SECONDS}
        AND substr(id, 1, 3) = 'cs_' ORDER BY created_at LIMIT ?2`,
     )
     .bind(now, limit)
@@ -201,8 +221,12 @@ export async function setSubscriptionEnd(db: D1Database, subscriptionId: string,
 
 /** Ends what a fully refunded payment bought. */
 export async function markRefunded(db: D1Database, paymentIntentId: string, now: number): Promise<boolean> {
+  // Pro for life taken back no longer replaces the yearly plan: that is left renewing.
   const result = await db
-    .prepare(`UPDATE purchases SET refunded_at = ?2 WHERE payment_intent_id = ?1 AND refunded_at IS NULL`)
+    .prepare(
+      `UPDATE purchases SET refunded_at = ?2, pending = CASE WHEN pending = 'stop_yearly' THEN NULL ELSE pending END
+       WHERE payment_intent_id = ?1 AND refunded_at IS NULL`,
+    )
     .bind(paymentIntentId, now)
     .run();
   return result.meta.changes > 0;

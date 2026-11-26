@@ -29,7 +29,7 @@ import { loader as subpageLoader } from "../../app/routes/subpage";
 const ORIGIN = "https://neat.link";
 const NOW = Math.floor(Date.now() / 1000);
 const YEAR = 365 * 24 * 3600;
-const TABLES = ["api_tokens", "media", "purchases", "domains", "pages", "sites", '"account"', '"user"'];
+const TABLES = ["api_tokens", "media", "purchases", "stale_hostnames", "domains", "pages", "sites", '"account"', '"user"'];
 
 async function user(id: string): Promise<string> {
   const stamp = new Date(NOW * 1000).toISOString();
@@ -62,12 +62,14 @@ async function answer<T = Record<string, unknown>>(response: Response | Promise<
 }
 
 /** Calls out of the Worker, answered here: Stripe, the DNS resolver and Cloudflare's API. */
-type Outbound = (url: URL, init: RequestInit & { body?: string }) => Response | null | Promise<Response | null>;
+type Outbound = (url: URL, init: { method: string; body?: string; headers: Headers }) => Response | null | Promise<Response | null>;
 let outbound: Outbound[] = [];
-const sent: Array<{ url: string; method: string; body: string }> = [];
+const sent: Array<{ url: string; method: string; body: string; key: string | null }> = [];
 
 /** The DNS the resolver answers from: name → type → records. */
 let dns: Record<string, Partial<Record<"NS" | "CNAME" | "TXT" | "A" | "AAAA", string[]>>> = {};
+/** Runs as the resolver is asked about a name, to change things in the meantime. */
+let onLookup: ((name: string) => Promise<void>) | null = null;
 const TYPE_NUMBERS = { A: 1, NS: 2, CNAME: 5, TXT: 16, AAAA: 28 } as const;
 
 beforeEach(async () => {
@@ -75,14 +77,16 @@ beforeEach(async () => {
   outbound = [];
   sent.length = 0;
   dns = {};
+  onLookup = null;
   vi.spyOn(globalThis, "fetch").mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
     const request = new Request(input, init);
     const url = new URL(request.url);
     const body = request.method === "GET" ? "" : new TextDecoder().decode(await request.arrayBuffer());
-    sent.push({ url: url.href, method: request.method, body });
+    sent.push({ url: url.href, method: request.method, body, key: request.headers.get("Idempotency-Key") });
     if (url.hostname === "cloudflare-dns.com") {
       const name = url.searchParams.get("name")!;
       const type = url.searchParams.get("type") as keyof typeof TYPE_NUMBERS;
+      await onLookup?.(name);
       const known = dns[name];
       const records = known?.[type] ?? [];
       return Response.json({
@@ -91,7 +95,7 @@ beforeEach(async () => {
       });
     }
     for (const handler of outbound) {
-      const result = await handler(url, { method: request.method, body });
+      const result = await handler(url, { method: request.method, body, headers: request.headers });
       if (result) return result;
     }
     return new Response(`No mock for ${request.method} ${url.href}`, { status: 599 });
@@ -242,7 +246,7 @@ describe("plans and payments", () => {
   it("refunds a second payment for what the account already has, and keeps a refund that came first", async () => {
     await user("ada");
     await grant("ada", "domains");
-    outbound.push((url, init) => (url.pathname === "/v1/refunds" && init.method === "POST" ? Response.json({ id: "re_1" }) : null));
+    stripeRefunds();
     outbound.push((url) => (url.pathname === "/v1/payment_intents/pi_back" ? Response.json({ latest_charge: { refunded: true } }) : null));
     outbound.push((url) => (url.pathname === "/v1/payment_intents/pi_dup" ? Response.json({ latest_charge: { refunded: false } }) : null));
     // Disputed and lost: the charge only says disputed, the dispute says lost.
@@ -335,7 +339,7 @@ describe("plans and payments", () => {
   it("refunds the later of two payments for the same plan paid at once", async () => {
     await user("ada");
     subscriptions();
-    outbound.push((url, init) => (url.pathname === "/v1/refunds" && init.method === "POST" ? Response.json({ id: "re_1" }) : null));
+    stripeRefunds();
     const results = await Promise.all([fulfilCheckout(yearly("cs_one", "sub_one"), NOW), fulfilCheckout(yearly("cs_two", "sub_two"), NOW)]);
     expect(results.filter(Boolean)).toHaveLength(1);
     const billing = await billingOf(env.DB, "ada");
@@ -348,27 +352,122 @@ describe("plans and payments", () => {
     expect(refunds).toEqual([`pi_${other}`]);
   });
 
-  it("finishes a refund a failed request left undone", async () => {
+  /**
+   * Stripe's refunds as Stripe keeps them: an idempotency key gets its first
+   * answer again, an error included, and a refund may take a while to
+   * succeed, or fail. `failure` sets how the next attempt goes wrong:
+   * "before" Stripe made anything, or "after" it made the refund.
+   */
+  function stripeRefunds() {
+    const model = {
+      refunds: [] as Array<{ id: string; payment_intent: string; status: string }>,
+      failure: null as "before" | "after" | null,
+      status: "succeeded",
+    };
+    const answers = new Map<string, { status: number; body: unknown }>();
+    outbound.push((url, init) => {
+      if (url.pathname === "/v1/refunds" && init.method === "POST") {
+        const key = init.headers.get("Idempotency-Key") ?? crypto.randomUUID();
+        let kept = answers.get(key);
+        if (!kept) {
+          const failure = model.failure;
+          model.failure = null;
+          if (failure !== "before") {
+            const refund = { id: `re_${model.refunds.length + 1}`, payment_intent: new URLSearchParams(init.body).get("payment_intent")!, status: model.status };
+            model.refunds.push(refund);
+            kept = failure === "after" ? { status: 500, body: { error: { message: "Something went wrong" } } } : { status: 200, body: refund };
+          } else kept = { status: 500, body: { error: { message: "Something went wrong" } } };
+          answers.set(key, kept);
+        }
+        return Response.json(kept.body, { status: kept.status });
+      }
+      if (url.pathname === "/v1/refunds" && init.method === "GET") {
+        return Response.json({ data: model.refunds.filter((refund) => refund.payment_intent === url.searchParams.get("payment_intent")) });
+      }
+      const one = /^\/v1\/refunds\/(re_\d+)$/.exec(url.pathname);
+      return one ? Response.json(model.refunds.find((refund) => refund.id === one[1])) : null;
+    });
+    return model;
+  }
+  const work = () => env.DB.prepare(`SELECT pending, refund_id, refunded_at FROM purchases WHERE id = 'cs_late'`).first();
+  const refundPosts = () => sent.filter((call) => call.url.endsWith("/v1/refunds") && call.method === "POST");
+
+  it("follows a duplicate's refund until Stripe has made it, and never makes a second", async () => {
     await user("ada");
     await grant("ada", "pro_life");
     subscriptions();
-    let refunds = 0;
-    outbound.push((url, init) => {
-      if (url.pathname !== "/v1/refunds" || init.method !== "POST") return null;
-      refunds += 1;
-      return refunds === 1 ? Response.json({ error: { message: "Try again" } }, { status: 500 }) : Response.json({ id: "re_2" });
-    });
+    const stripeSide = stripeRefunds();
     outbound.push((url) => (url.pathname === "/v1/checkout/sessions/cs_late" ? Response.json(yearly("cs_late", "sub_late")) : null));
+    // Stripe makes the refund, still pending, but the answer is lost.
+    stripeSide.status = "pending";
+    stripeSide.failure = "after";
     await expect(fulfilCheckout(yearly("cs_late", "sub_late"), NOW)).rejects.toThrow();
-    const pending = () => env.DB.prepare(`SELECT pending, refunded_at FROM purchases WHERE id = 'cs_late'`).first();
-    expect(await pending()).toEqual({ pending: "refund", refunded_at: NOW });
+    expect(await work()).toEqual({ pending: "refund", refund_id: null, refunded_at: NOW });
+    // The hourly run finds it, and waits while Stripe is still making it.
     await finishPendingPurchases(NOW + 3600);
-    expect(refunds).toBe(2);
-    expect(await pending()).toEqual({ pending: null, refunded_at: NOW });
-    // Done is done: neither the hourly run nor another delivery refunds again.
+    expect(await work()).toEqual({ pending: "refund", refund_id: "re_1", refunded_at: NOW });
+    stripeSide.refunds[0]!.status = "succeeded";
     await finishPendingPurchases(NOW + 7200);
-    await fulfilCheckout(yearly("cs_late", "sub_late"), NOW + 7200);
-    expect(refunds).toBe(2);
+    expect(await work()).toEqual({ pending: null, refund_id: "re_1", refunded_at: NOW });
+    // Done is done: neither the hourly run nor another delivery refunds again.
+    await finishPendingPurchases(NOW + 10800);
+    await fulfilCheckout(yearly("cs_late", "sub_late"), NOW + 10800);
+    expect(stripeSide.refunds).toHaveLength(1);
+    expect(refundPosts()).toHaveLength(1);
+  });
+
+  it("tries again with a new key after Stripe failed an attempt, and leaves a refund Stripe failed to be paid back by hand", async () => {
+    await user("ada");
+    await grant("ada", "pro_life");
+    subscriptions();
+    const stripeSide = stripeRefunds();
+    outbound.push((url) => (url.pathname === "/v1/checkout/sessions/cs_late" ? Response.json(yearly("cs_late", "sub_late")) : null));
+    stripeSide.failure = "before";
+    await expect(fulfilCheckout(yearly("cs_late", "sub_late"), NOW)).rejects.toThrow();
+    // The same key would only answer the same error again.
+    stripeSide.status = "pending";
+    await finishPendingPurchases(NOW + 3600);
+    const keys = refundPosts().map((call) => call.key);
+    expect(keys).toHaveLength(2);
+    expect(new Set(keys).size).toBe(2);
+    expect(await work()).toMatchObject({ pending: "refund", refund_id: "re_1" });
+    // Stripe accepted the refund, then failed it (a closed card): no more tries.
+    stripeSide.refunds[0]!.status = "failed";
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    await finishPendingPurchases(NOW + 7200);
+    expect(await work()).toMatchObject({ pending: "refund_failed" });
+    expect(errors).toHaveBeenCalledWith(expect.stringContaining("pay it back by hand"), "cs_late");
+    sent.length = 0;
+    await finishPendingPurchases(NOW + 10800);
+    expect(sent).toEqual([]);
+  });
+
+  it("leaves the yearly plan renewing when Pro for life is taken back before it was stopped", async () => {
+    await user("ada");
+    await env.DB.prepare(`INSERT INTO purchases (id, user_id, product, subscription_id, created_at, ends_at) VALUES ('cs_year', 'ada', 'pro_year', 'sub_9', ?1, ?2)`)
+      .bind(NOW, NOW + YEAR)
+      .run();
+    outbound.push((url) => (url.pathname === "/v1/payment_intents/pi_life" ? Response.json({ latest_charge: { refunded: false } }) : null));
+    outbound.push((url, init) =>
+      url.pathname === "/v1/subscriptions/sub_9" && init.method === "POST" ? Response.json({ error: { message: "Try again" } }, { status: 500 }) : null,
+    );
+    const life = { ...yearly("cs_life", "unused"), mode: "payment", subscription: null, payment_intent: "pi_life", metadata: { product: "pro_life" } };
+    outbound.push((url) => (url.pathname === "/v1/checkout/sessions/cs_life" ? Response.json(life) : null));
+    await expect(fulfilCheckout(life, NOW)).rejects.toThrow();
+    expect(await env.DB.prepare(`SELECT pending FROM purchases WHERE id = 'cs_life'`).first("pending")).toBe("stop_yearly");
+    // Refunded before the retry: the yearly plan is the account's Pro again.
+    const body = JSON.stringify({ id: "evt_r", type: "charge.refunded", data: { object: { refunded: true, payment_intent: "pi_life" } } });
+    const headers = { "Stripe-Signature": await signStripePayload(body, env.STRIPE_WEBHOOK_SECRET, NOW) };
+    expect((await stripeWebhook({ request: new Request(`${ORIGIN}/stripe/webhook`, { method: "POST", headers, body }) } as never)).status).toBe(200);
+    expect(await env.DB.prepare(`SELECT pending FROM purchases WHERE id = 'cs_life'`).first("pending")).toBeNull();
+    // And should the work still be there, it is checked first.
+    await env.DB.prepare(`UPDATE purchases SET pending = 'stop_yearly', pending_lock = NULL WHERE id = 'cs_life'`).run();
+    const tries = () => sent.filter((call) => call.url.endsWith("/v1/subscriptions/sub_9") && call.method === "POST").length;
+    const before = tries();
+    await finishPendingPurchases(NOW + 3600);
+    expect(tries()).toBe(before);
+    expect(await env.DB.prepare(`SELECT pending FROM purchases WHERE id = 'cs_life'`).first("pending")).toBeNull();
+    expect((await billingOf(env.DB, "ada")).running.map((purchase) => purchase.id)).toEqual(["cs_year"]);
   });
 
   it("takes back what a lost chargeback paid for", async () => {
@@ -657,6 +756,49 @@ describe("own domains", () => {
     );
   });
 
+  it("delete the hostname of a claim replaced while a check made it, at once or in the hourly run", async () => {
+    const token = await user("ada");
+    await api(token, "POST", "sites", { handle: "adapage", published: true });
+    await grant("ada", "domains");
+    const siteId = (await siteByHandle(env.DB, "adapage"))!.id;
+    dns["ada-lovelace.com"] = godaddy;
+    dns["www.ada-lovelace.com"] = {};
+    dns["ada-byron.com"] = godaddy;
+    dns["www.ada-byron.com"] = {};
+    let cloudflareDown = false;
+    await withSaas(
+      (_url, init) =>
+        init.method === "DELETE" && cloudflareDown ? Response.json({ success: false, errors: [{ code: 1000, message: "down" }] }, { status: 500 }) : hostnameAnswer("ch_old"),
+      async () => {
+        const replace = async (from: string, to: string) => {
+          await api(token, "PUT", "sites/adapage/domain", { hostname: from });
+          // While the new name's DNS is looked up, a check of the old claim makes and saves its hostname.
+          onLookup = async (name) => {
+            if (name !== to) return;
+            onLookup = null;
+            await env.DB.prepare(`UPDATE domains SET cf_id = 'ch_old' WHERE site_id = ?1`).bind(siteId).run();
+          };
+          expect((await api(token, "PUT", "sites/adapage/domain", { hostname: to })).status).toBe(200);
+          expect((await domainOf(env.DB, siteId))!).toMatchObject({ hostname: to, cfId: null });
+        };
+        await replace("www.ada-lovelace.com", "www.ada-byron.com");
+        expect(deletedAtCloudflare()).toEqual(["ch_old"]);
+        expect(await env.DB.prepare(`SELECT count(*) AS left FROM stale_hostnames`).first("left")).toBe(0);
+
+        // Cloudflare cannot delete it now: it stays listed until the hourly run can.
+        sent.length = 0;
+        cloudflareDown = true;
+        vi.spyOn(console, "error").mockImplementation(() => {});
+        await replace("www.ada-lovelace.com", "www.ada-byron.com");
+        expect(await env.DB.prepare(`SELECT cf_id FROM stale_hostnames`).first("cf_id")).toBe("ch_old");
+        cloudflareDown = false;
+        await checkDomains(NOW + 3600);
+        expect(deletedAtCloudflare()).toEqual(["ch_old", "ch_old"]);
+        expect(await env.DB.prepare(`SELECT count(*) AS left FROM stale_hostnames`).first("left")).toBe(0);
+      },
+    );
+  });
+
   it("keep a hostname two claims share until the last lets it go", async () => {
     const ada = await user("ada");
     const bob = await user("bob");
@@ -757,7 +899,7 @@ describe("subpages", () => {
     expect((await answer<{ pages: Sub[] }>(api(token, "GET", "sites/adapage/pages"))).body.pages).toEqual([]);
   });
 
-  it("load the site's pixels at their public address only, never at a private link", async () => {
+  it("load the site's pixels at their public address only, and a private link sends no referrer", async () => {
     const token = await user("ada");
     await grant("ada", "pro_life");
     await api(token, "POST", "sites", { handle: "adapage", title: "Ada", published: true, pixels: { google: "G-ABC1234" } });
@@ -770,10 +912,12 @@ describe("subpages", () => {
         url: new URL(`${ORIGIN}/adapage/${segment}`),
         context: {},
       } as never)) as unknown as { data: { pixels: unknown }; init: { headers?: Record<string, string> } };
-      return { pixels: result.data.pixels, header: result.init.headers?.["X-Page-Pixels"] ?? null };
+      const headers = result.init.headers ?? {};
+      return { pixels: result.data.pixels, header: headers["X-Page-Pixels"] ?? null, referrer: headers["Referrer-Policy"] ?? null };
     };
-    expect(await view("notes")).toEqual({ pixels: { google: "G-ABC1234" }, header: "google" });
-    expect(await view(privateId)).toEqual({ pixels: null, header: null });
+    expect(await view("notes")).toEqual({ pixels: { google: "G-ABC1234" }, header: "google", referrer: null });
+    // Nor does a private link's address travel on as the referrer.
+    expect(await view(privateId)).toEqual({ pixels: null, header: null, referrer: "no-referrer" });
   });
 });
 

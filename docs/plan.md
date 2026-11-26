@@ -143,7 +143,12 @@ Cloudflare's resolver; a lookup that fails is "do not know", never "no".
   then $0.10 a month each, billed from when one is made until it is
   deleted, so none is made before the DNS points here, one that stops
   pointing here is deleted a week later, and one whose owner's plan ended
-  is deleted at the next check. Without `CF_ZONE_ID` and the `CF_API_TOKEN`
+  is deleted at the next check. A hostname that no claim names any more (a
+  domain disconnected or replaced, also while a check was making it) goes
+  into `stale_hostnames` in the same transaction that lets the claim go,
+  and leaves it only once Cloudflare has deleted it, or a claim on the same
+  name holds it again; claims on one name share its one hostname, so one
+  letting go never deletes it from under another. Without `CF_ZONE_ID` and the `CF_API_TOKEN`
   secret (local, staging) none is made and a domain is served as soon as
   its DNS points here.
 - **Checks**: at once when claimed, every 20 seconds while the editor is
@@ -210,6 +215,16 @@ Decided 2026-11-25:
   done at Stripe (a duplicate's refund, stopping the yearly plan) is kept on
   the row and done by one request at a time; one that fails half way is
   finished by the next delivery or the hourly job.
+- **Refunds are followed to the end**: a duplicate's refund is saved by its
+  ID and checked hourly until Stripe says it succeeded. A retry first looks
+  for a refund already made for the payment (an answer can be lost), and
+  each attempt to make one has its own idempotency key, since Stripe
+  answers a key with its first answer, an error too, for a day. A refund
+  Stripe fails (a closed card) leaves the purchase `pending =
+  'refund_failed'`, logged, for paying back by hand:
+  `SELECT * FROM purchases WHERE pending = 'refund_failed'`.
+- **Pro for life taken back** (refund, lost chargeback) before the yearly
+  plan was stopped leaves the yearly plan renewing.
 - **No paying twice**: an account has one open Checkout Session; starting
   another expires the one before. A payment that still arrives for
   something the account already has is refunded at once (a duplicate
@@ -239,7 +254,12 @@ Decided 2026-11-25:
   Security Policy lets in those vendors' addresses only: the page route
   hands the Worker an internal header, kept with the edge-cached copy.
   Pages without pixels stay as closed as before. Consent where the law asks
-  for it is the owner's (said in the terms and the editor).
+  for it is the owner's (said in the terms and the editor). They load only
+  where anyone may find the page: never at a subpage's private address
+  (analytics would record it) nor on a draft only its owner sees. A
+  private address also sends no referrer (`Referrer-Policy: no-referrer`,
+  as a header kept with the cached copy and in the page itself), so it does
+  not reach the site's own page, and its analytics, as `document.referrer`.
 - **No sign**: `sites.branding = 0` hides the ⎆ neat.link footer.
 - **Subpages**: rows in `pages` with a `private_id` (12 lowercase letters
   and digits, `/<handle>/<private_id>`, never indexed, rotatable) and, once

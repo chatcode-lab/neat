@@ -22,11 +22,15 @@ CREATE TABLE purchases (
   ends_at INTEGER,
   refunded_at INTEGER,
   -- What is still to be done at Stripe for it: 'refund' a payment for what
-  -- the account already had, or 'stop_yearly' plans that Pro for life
-  -- replaces. Null once done. pending_lock is when a request took it on,
-  -- so two do not do it at once; one that stopped half way is retried.
-  pending TEXT CHECK (pending IN ('refund', 'stop_yearly')),
-  pending_lock INTEGER
+  -- the account already had (refund_id is the refund once made, followed
+  -- until Stripe says it succeeded), or 'stop_yearly' plans that Pro for
+  -- life replaces. 'refund_failed': Stripe could not make the refund, so
+  -- the owner is paid back by hand. Null once done. pending_lock is when a
+  -- request took it on, so two do not do it at once; one that stopped half
+  -- way is retried.
+  pending TEXT CHECK (pending IN ('refund', 'stop_yearly', 'refund_failed')),
+  pending_lock INTEGER,
+  refund_id TEXT
 ) STRICT;
 CREATE INDEX purchases_pending ON purchases (pending_lock) WHERE pending IS NOT NULL;
 CREATE INDEX purchases_user ON purchases (user_id);
@@ -124,6 +128,15 @@ INSERT INTO domains_next (site_id, hostname, code, kind, status, ssl_status, cre
   SELECT site_id, hostname, lower(hex(randomblob(6))), 'route', 'active', 'active', created_at, created_at, created_at FROM domains;
 DROP TABLE domains;
 ALTER TABLE domains_next RENAME TO domains;
+
+-- Custom hostnames at Cloudflare that no claim holds any more: of a domain
+-- disconnected or replaced, or made while it was. Each stays here until
+-- Cloudflare has deleted it, so none is left billed.
+CREATE TABLE stale_hostnames (
+  cf_id TEXT PRIMARY KEY,
+  hostname TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+) STRICT;
 
 -- Files an account uploaded to embed in its pages, kept in the MEDIA bucket.
 CREATE TABLE media (

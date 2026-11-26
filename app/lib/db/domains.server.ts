@@ -111,22 +111,58 @@ export async function domainHeldElsewhere(db: D1Database, hostname: string, site
   return Boolean(row);
 }
 
-/** Starts a site's claim on a domain, replacing any claim it had. */
+/** Puts a site's custom hostname, as its row is now, on the list to delete at Cloudflare. */
+const staleFrom = (db: D1Database, siteId: string, now: number) =>
+  db
+    .prepare(
+      `INSERT INTO stale_hostnames (cf_id, hostname, created_at)
+       SELECT cf_id, hostname, ?2 FROM domains WHERE site_id = ?1 AND cf_id IS NOT NULL
+       ON CONFLICT DO NOTHING RETURNING cf_id`,
+    )
+    .bind(siteId, now);
+
+/**
+ * Starts a site's claim on a domain, replacing any claim it had. The
+ * replaced claim's custom hostname, should a check have just made it, goes
+ * on the list to delete in the same transaction, so it cannot be lost.
+ */
 export async function claimDomain(
   db: D1Database,
   input: { siteId: string; hostname: string; code: string; zone: string | null; provider: string | null; now: number },
-): Promise<void> {
+): Promise<string[]> {
+  const [stale] = await db.batch([
+    staleFrom(db, input.siteId, input.now),
+    db
+      .prepare(
+        `INSERT INTO domains (site_id, hostname, code, kind, status, zone, provider, created_at)
+         VALUES (?1, ?2, ?3, 'saas', 'pending', ?4, ?5, ?6)
+         ON CONFLICT (site_id) DO UPDATE SET hostname = excluded.hostname, code = excluded.code, kind = 'saas',
+           status = 'pending', zone = excluded.zone, provider = excluded.provider, cf_id = NULL, ssl_status = NULL,
+           registered_at = NULL, cf_http_path = NULL, cf_http_body = NULL, stalled_at = NULL,
+           error = NULL, created_at = excluded.created_at, checked_at = NULL, verified_at = NULL, lost_at = NULL`,
+      )
+      .bind(input.siteId, input.hostname, input.code, input.zone, input.provider, input.now),
+  ]);
+  return (stale!.results as Array<{ cf_id: string }>).map((row) => row.cf_id);
+}
+
+/** Puts a custom hostname nothing names any more on the list to delete at Cloudflare. */
+export async function queueStaleHostname(db: D1Database, cfId: string, hostname: string, now: number): Promise<void> {
   await db
-    .prepare(
-      `INSERT INTO domains (site_id, hostname, code, kind, status, zone, provider, created_at)
-       VALUES (?1, ?2, ?3, 'saas', 'pending', ?4, ?5, ?6)
-       ON CONFLICT (site_id) DO UPDATE SET hostname = excluded.hostname, code = excluded.code, kind = 'saas',
-         status = 'pending', zone = excluded.zone, provider = excluded.provider, cf_id = NULL, ssl_status = NULL,
-         registered_at = NULL, cf_http_path = NULL, cf_http_body = NULL, stalled_at = NULL,
-         error = NULL, created_at = excluded.created_at, checked_at = NULL, verified_at = NULL, lost_at = NULL`,
-    )
-    .bind(input.siteId, input.hostname, input.code, input.zone, input.provider, input.now)
+    .prepare(`INSERT INTO stale_hostnames (cf_id, hostname, created_at) VALUES (?1, ?2, ?3) ON CONFLICT DO NOTHING`)
+    .bind(cfId, hostname, now)
     .run();
+}
+
+/** Custom hostnames still to delete at Cloudflare, oldest first. */
+export async function staleHostnames(db: D1Database, limit: number): Promise<string[]> {
+  const { results } = await db.prepare(`SELECT cf_id FROM stale_hostnames ORDER BY created_at LIMIT ?1`).bind(limit).all<{ cf_id: string }>();
+  return results.map((row) => row.cf_id);
+}
+
+/** A custom hostname deleted at Cloudflare, or taken up by a claim again. */
+export async function forgetStaleHostname(db: D1Database, cfId: string): Promise<void> {
+  await db.prepare(`DELETE FROM stale_hostnames WHERE cf_id = ?1`).bind(cfId).run();
 }
 
 /**
@@ -194,9 +230,11 @@ export async function hostnameHeld(db: D1Database, cfId: string, exceptSiteId: s
   return Boolean(row);
 }
 
-export async function dropDomain(db: D1Database, siteId: string): Promise<DomainRecord | null> {
-  const row = await db.prepare(`DELETE FROM domains WHERE site_id = ?1 RETURNING *`).bind(siteId).first<DomainRow>();
-  return row ? toRecord(row) : null;
+/** Deletes a site's claim; its custom hostname, as it is at that moment, goes on the list to delete at Cloudflare. */
+export async function dropDomain(db: D1Database, siteId: string, now: number): Promise<{ record: DomainRecord | null; stale: string[] }> {
+  const [stale, dropped] = await db.batch([staleFrom(db, siteId, now), db.prepare(`DELETE FROM domains WHERE site_id = ?1 RETURNING *`).bind(siteId)]);
+  const row = dropped!.results[0] as DomainRow | undefined;
+  return { record: row ? toRecord(row) : null, stale: (stale!.results as Array<{ cf_id: string }>).map((entry) => entry.cf_id) };
 }
 
 /** The answer Cloudflare expects at a path of a domain it was asked to make, to prove the domain points here. */

@@ -27,7 +27,8 @@ export function isFrameablePath(pathname: string): boolean {
 
 /**
  * Applies the security baseline to a response. Every response gets the site
- * policy, replacing anything a route set itself.
+ * policy, replacing anything a route set itself, except a route may send no
+ * referrer at all (a private link, whose address must not travel on).
  */
 export function withSecurityHeaders(request: Request, response: Response, options: SecurityHeaderOptions): Response {
   const url = new URL(request.url);
@@ -44,7 +45,7 @@ export function withSecurityHeaders(request: Request, response: Response, option
   // frame-ancestors decides alone.
   if (!frameable) headers.set("X-Frame-Options", "DENY");
   headers.set("X-Content-Type-Options", "nosniff");
-  headers.set("Referrer-Policy", "strict-origin-when-cross-origin");
+  if (headers.get("Referrer-Policy") !== "no-referrer") headers.set("Referrer-Policy", "strict-origin-when-cross-origin");
   headers.set("Permissions-Policy", "camera=(), geolocation=(), microphone=(), payment=()");
   if (url.protocol === "https:") headers.set("Strict-Transport-Security", "max-age=31536000");
   // Pages can carry the signed-in account's own data, so nothing is shared
