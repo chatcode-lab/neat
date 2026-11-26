@@ -2,7 +2,7 @@ import { env } from "cloudflare:workers";
 import { beforeAll, describe, expect, it } from "vitest";
 
 import { stripe } from "../../app/lib/billing/stripe.server";
-import { billingPortal, type CheckoutSession, fulfilCheckout, startCheckout } from "../../app/lib/billing.server";
+import { billingPortal, type CheckoutSession, fulfilCheckout, handleStripeEvent, startCheckout } from "../../app/lib/billing.server";
 import type { Account } from "../../app/lib/db/accounts.server";
 import { PRODUCT_IDS, PRODUCTS } from "../../app/lib/plans";
 
@@ -146,6 +146,63 @@ describe.skipIf(!live)("Stripe test mode", () => {
       expect(await purchase(id)).toMatchObject({ pending: null });
       const refunds = await stripe<{ data: unknown[] }>("GET", "refunds", { payment_intent: charges.data[0]!.payment_intent });
       expect(refunds.data).toHaveLength(1);
+    } finally {
+      await stripe("DELETE", `customers/${customer.id}`);
+    }
+  }, 60_000);
+
+  it("gives back the rest of a duplicate payment partly refunded by hand", async () => {
+    await env.DB.prepare(`DELETE FROM purchases WHERE user_id = ?1`).bind(account.id).run();
+    await env.DB.prepare(`INSERT INTO purchases (id, user_id, product, created_at) VALUES ('grant_live_life', ?1, 'pro_life', unixepoch())`)
+      .bind(account.id)
+      .run();
+    const paid = await pay("pm_card_visa");
+    await stripe("POST", "refunds", { payment_intent: paid.id, amount: 300 });
+    const id = `cs_live_part_${Date.now().toString(36)}`;
+    expect(await fulfilCheckout(paidSession(id, "pro_life", { payment_intent: paid.id }), now())).toBe(false);
+    expect(await purchase(id)).toMatchObject({ refunded_at: expect.any(Number), pending: null });
+    const refunds = await stripe<{ data: Array<{ amount: number; status: string; metadata: Record<string, string> }> }>("GET", "refunds", {
+      payment_intent: paid.id,
+    });
+    expect(refunds.data.map((refund) => [refund.amount, refund.status, refund.metadata.checkout_session ?? null]).sort()).toEqual([
+      [300, "succeeded", null],
+      [700, "succeeded", id],
+    ]);
+  }, 60_000);
+
+  it("stops the yearly plan for Pro for life, and lets it renew again once Pro for life is refunded", async () => {
+    await env.DB.prepare(`DELETE FROM purchases WHERE user_id = ?1`).bind(account.id).run();
+    const customer = await stripe<{ id: string }>("POST", "customers", {
+      email: account.email,
+      payment_method: "pm_card_visa",
+      invoice_settings: { default_payment_method: "pm_card_visa" },
+      metadata: { test: "neat stripe-live" },
+    });
+    try {
+      const card = (await stripe<{ data: Array<{ id: string }> }>("GET", `customers/${customer.id}/payment_methods`)).data[0]!;
+      const price = (await stripe<{ data: Array<{ id: string }> }>("GET", "prices", { lookup_keys: [PRODUCTS.pro_year.lookupKey], active: true })).data[0]!;
+      const subscription = await stripe<{ id: string }>("POST", "subscriptions", {
+        customer: customer.id,
+        items: [{ price: price.id }],
+        default_payment_method: card.id,
+        metadata: { test: "neat stripe-live" },
+      });
+      await env.DB.prepare(
+        `INSERT INTO purchases (id, user_id, product, subscription_id, created_at, ends_at) VALUES ('cs_live_year', ?1, 'pro_year', ?2, unixepoch(), unixepoch() + 86400)`,
+      )
+        .bind(account.id, subscription.id)
+        .run();
+      const life = await pay("pm_card_visa");
+      const id = `cs_live_life_${Date.now().toString(36)}`;
+      expect(await fulfilCheckout(paidSession(id, "pro_life", { payment_intent: life.id }), now())).toBe(true);
+      type Plan = { cancel_at_period_end: boolean; metadata: Record<string, string> };
+      expect(await stripe<Plan>("GET", `subscriptions/${subscription.id}`)).toMatchObject({ cancel_at_period_end: true, metadata: { stopped_for: id } });
+      await stripe("POST", "refunds", { payment_intent: life.id });
+      await handleStripeEvent({ id: "evt_live", type: "charge.refunded", data: { object: { refunded: true, payment_intent: life.id } } }, now());
+      const resumed = await stripe<Plan>("GET", `subscriptions/${subscription.id}`);
+      expect(resumed.cancel_at_period_end).toBe(false);
+      expect(resumed.metadata.stopped_for).toBeUndefined();
+      expect(await purchase(id)).toMatchObject({ refunded_at: expect.any(Number), pending: null });
     } finally {
       await stripe("DELETE", `customers/${customer.id}`);
     }

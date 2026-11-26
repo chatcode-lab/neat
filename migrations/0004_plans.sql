@@ -21,18 +21,18 @@ CREATE TABLE purchases (
   -- paid year and a few days' grace, moved on at each renewal.
   ends_at INTEGER,
   refunded_at INTEGER,
-  -- What is still to be done at Stripe for it: 'refund' a payment for what
-  -- the account already had (refund_id is the refund once made, followed
-  -- until Stripe says it succeeded), or 'stop_yearly' plans that Pro for
-  -- life replaces. 'refund_failed': Stripe could not make the refund, so
-  -- the owner is paid back by hand. Null once done. pending_lock is when a
-  -- request took it on, so two do not do it at once; one that stopped half
-  -- way is retried.
-  pending TEXT CHECK (pending IN ('refund', 'stop_yearly', 'refund_failed')),
-  pending_lock INTEGER,
-  refund_id TEXT
+  -- What is still to be done at Stripe for it: 'refund' all of a payment
+  -- for what the account already had, followed until Stripe has made it;
+  -- 'stop_yearly' plans that Pro for life replaces, or 'resume_yearly' them
+  -- once Pro for life was taken back. 'refund_failed': Stripe could not
+  -- make the refund, so the owner is paid back by hand. Null once done.
+  -- pending_at is when it may next be taken on: a request taking it on sets
+  -- it a while ahead, so two do not do it at once, and one that must try
+  -- again sets it to when it tried, behind work not tried since.
+  pending TEXT CHECK (pending IN ('refund', 'stop_yearly', 'resume_yearly', 'refund_failed')),
+  pending_at INTEGER
 ) STRICT;
-CREATE INDEX purchases_pending ON purchases (pending_lock) WHERE pending IS NOT NULL;
+CREATE INDEX purchases_pending ON purchases (pending_at) WHERE pending IS NOT NULL;
 CREATE INDEX purchases_user ON purchases (user_id);
 CREATE INDEX purchases_payment ON purchases (payment_intent_id) WHERE payment_intent_id IS NOT NULL;
 

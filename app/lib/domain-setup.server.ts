@@ -9,6 +9,7 @@ import {
   domainOf,
   domainsToCheck,
   dropDomain,
+  forgetHeldHostname,
   forgetStaleHostname,
   hostnameHeld,
   orphanedHostnames,
@@ -39,14 +40,19 @@ async function releaseHostname(cfId: string, exceptSiteId: string | null): Promi
 
 /**
  * Deletes listed custom hostnames nothing names any more. One a claim has
- * taken up again (the same name connected anew) leaves the list; one
- * Cloudflare could not delete now stays on it for the hourly run.
+ * taken up again (the same name connected anew) leaves the list, unless
+ * that claim let go meanwhile; one Cloudflare could not delete now stays
+ * on it for the hourly run.
  */
 async function releaseStale(cfIds: readonly string[]): Promise<void> {
   if (!saasConfigured()) return;
   for (const cfId of cfIds) {
     try {
-      if (!(await hostnameHeld(env.DB, cfId, null))) await removeHostname(cfId);
+      if (await hostnameHeld(env.DB, cfId, null)) {
+        await forgetHeldHostname(env.DB, cfId);
+        continue;
+      }
+      await removeHostname(cfId);
       await forgetStaleHostname(env.DB, cfId);
     } catch (error) {
       console.error("stale custom hostname", cfId, error);

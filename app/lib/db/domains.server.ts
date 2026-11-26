@@ -111,13 +111,16 @@ export async function domainHeldElsewhere(db: D1Database, hostname: string, site
   return Boolean(row);
 }
 
-/** Puts a site's custom hostname, as its row is now, on the list to delete at Cloudflare. */
+/**
+ * Puts a site's custom hostname, as its row is now, on the list to delete
+ * at Cloudflare, and returns it, also when it was on the list already.
+ */
 const staleFrom = (db: D1Database, siteId: string, now: number) =>
   db
     .prepare(
       `INSERT INTO stale_hostnames (cf_id, hostname, created_at)
        SELECT cf_id, hostname, ?2 FROM domains WHERE site_id = ?1 AND cf_id IS NOT NULL
-       ON CONFLICT DO NOTHING RETURNING cf_id`,
+       ON CONFLICT (cf_id) DO UPDATE SET hostname = excluded.hostname RETURNING cf_id`,
     )
     .bind(siteId, now);
 
@@ -160,9 +163,18 @@ export async function staleHostnames(db: D1Database, limit: number): Promise<str
   return results.map((row) => row.cf_id);
 }
 
-/** A custom hostname deleted at Cloudflare, or taken up by a claim again. */
+/** A custom hostname deleted at Cloudflare. */
 export async function forgetStaleHostname(db: D1Database, cfId: string): Promise<void> {
   await db.prepare(`DELETE FROM stale_hostnames WHERE cf_id = ?1`).bind(cfId).run();
+}
+
+/**
+ * Takes a custom hostname off the list should a claim hold it again (the
+ * same name connected anew), checked in the same statement, so a last
+ * claim letting go meanwhile leaves it listed.
+ */
+export async function forgetHeldHostname(db: D1Database, cfId: string): Promise<void> {
+  await db.prepare(`DELETE FROM stale_hostnames WHERE cf_id = ?1 AND EXISTS (SELECT 1 FROM domains WHERE cf_id = ?1)`).bind(cfId).run();
 }
 
 /**

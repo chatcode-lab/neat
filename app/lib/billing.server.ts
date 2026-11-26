@@ -9,12 +9,12 @@ import {
   endPending,
   finishCheckout,
   markRefunded,
-  type PendingWork,
+  postponePending,
   purchaseExists,
   replaceCheckout,
   runningSubscriptions,
-  saveRefundId,
   setSubscriptionEnd,
+  stillPending,
   takePending,
   unfinishedPurchases,
 } from "./db/billing.server";
@@ -206,6 +206,7 @@ interface Subscription {
   current_period_start?: number;
   current_period_end?: number;
   latest_invoice?: string | null;
+  metadata?: Record<string, string> | null;
   items?: { data?: Array<{ current_period_start?: number; current_period_end?: number }> };
 }
 
@@ -264,29 +265,31 @@ async function paymentTakenBack(paymentIntent: string): Promise<boolean> {
 interface Refund {
   id: string;
   status: string;
+  amount: number;
+  metadata?: Record<string, string> | null;
 }
 
+type Outcome = "done" | "retry" | "failed";
+
 /** What a refund's status means for the work: Stripe may take a while, or fail it after accepting it. */
-function refundOutcome(status: string): "done" | "retry" | "failed" {
+function refundOutcome(status: string): Outcome {
   if (status === "succeeded") return "done";
   if (status === "failed" || status === "canceled") return "failed";
   return "retry";
 }
 
 /**
- * Gives back a payment for something the account already had, and stops a
- * duplicate subscription. Safe to repeat. A refund made before is followed,
- * never made again: by its ID once saved, or found among the payment's
- * refunds when the request that made it never heard back. Each attempt to
- * make one has its own idempotency key, since Stripe answers a key with its
- * first answer for a day, an error included.
+ * Gives back all of a payment for something the account already had, and
+ * stops a duplicate subscription. Safe to repeat. Done once refunds have
+ * given back the whole payment, whoever made them (one made by hand before
+ * counts for what it gave); while one is still settling it is waited for.
+ * This session's own refund is told by its metadata, so one whose answer
+ * was lost is followed, never made again, and one Stripe failed is left
+ * for paying back by hand. Each attempt to make one has its own idempotency
+ * key, since Stripe answers a key with its first answer for a day, an error
+ * included; it gives back what is left of the payment.
  */
-async function refundDuplicate(
-  session: CheckoutSession,
-  subscription: Subscription | null,
-  work: PendingWork,
-  now: number,
-): Promise<"done" | "retry" | "failed"> {
+async function refundDuplicate(session: CheckoutSession, subscription: Subscription | null, now: number): Promise<Outcome> {
   let paymentIntent = session.payment_intent;
   if (subscription) {
     if (subscription.status !== "canceled" && subscription.status !== "incomplete_expired") {
@@ -305,53 +308,83 @@ async function refundDuplicate(
     console.error("duplicate purchase without a payment to refund", session.id);
     return "done";
   }
-  let refund = work.refundId ? await stripe<Refund>("GET", `refunds/${path(work.refundId)}`) : undefined;
-  if (!refund) {
-    const made = await stripe<{ data: Refund[] }>("GET", "refunds", { payment_intent: paymentIntent, limit: 10 });
-    refund = made.data.find((other) => refundOutcome(other.status) !== "failed");
+  const [intent, made] = await Promise.all([
+    stripe<{ amount_received?: number }>("GET", `payment_intents/${path(paymentIntent)}`),
+    stripe<{ data: Refund[] }>("GET", "refunds", { payment_intent: paymentIntent, limit: 100 }),
+  ]);
+  if (made.data.some((refund) => refundOutcome(refund.status) === "retry")) return "retry";
+  const given = made.data.filter((refund) => refund.status === "succeeded").reduce((sum, refund) => sum + refund.amount, 0);
+  if (given >= (intent.amount_received ?? 0)) return "done";
+  const ours = made.data.filter((refund) => refund.metadata?.checkout_session === session.id);
+  if (ours.some((refund) => refundOutcome(refund.status) === "failed")) return "failed";
+  try {
+    const refund = await stripe<Refund>(
+      "POST",
+      "refunds",
+      { payment_intent: paymentIntent, reason: "duplicate", metadata: { checkout_session: session.id } },
+      { idempotencyKey: `refund-duplicate-${session.id}-${now}` },
+    );
+    return refundOutcome(refund.status);
+  } catch (error) {
+    if (error instanceof StripeError && error.code === "charge_already_refunded") return "done";
+    if (error instanceof StripeError && error.code === "charge_disputed") return "failed";
+    throw error;
   }
-  if (!refund) {
-    try {
-      refund = await stripe<Refund>(
-        "POST",
-        "refunds",
-        { payment_intent: paymentIntent, reason: "duplicate", metadata: { checkout_session: session.id } },
-        { idempotencyKey: `refund-duplicate-${session.id}-${now}` },
-      );
-    } catch (error) {
-      if (error instanceof StripeError && error.code === "charge_already_refunded") return "done";
-      if (error instanceof StripeError && error.code === "charge_disputed") return "failed";
-      throw error;
-    }
+}
+
+/**
+ * Stops the yearly plans Pro for life replaces from renewing, each marked
+ * as stopped for this purchase, so they can renew again should it be taken
+ * back. That is checked before each, and should it happen while one is
+ * being stopped, the purchase's work turns to resuming them, taken on next.
+ * One already stopped (by its owner) is left as it is, and so stays stopped.
+ */
+async function stopYearly(lifetimeId: string, userId: string): Promise<void> {
+  for (const id of await runningSubscriptions(env.DB, userId)) {
+    const yearly = await stripe<Subscription>("GET", `subscriptions/${path(id)}`);
+    if (yearly.cancel_at_period_end || yearly.status === "canceled" || yearly.status === "incomplete_expired") continue;
+    if (!(await stillPending(env.DB, lifetimeId, "stop_yearly"))) return;
+    await stripe("POST", `subscriptions/${path(id)}`, { cancel_at_period_end: true, metadata: { stopped_for: lifetimeId } });
   }
-  if (refund.id !== work.refundId) await saveRefundId(env.DB, session.id, refund.id);
-  return refundOutcome(refund.status);
+}
+
+/** Lets the yearly plans a Pro for life purchase stopped renew again, now that it was taken back. */
+async function resumeYearly(lifetimeId: string, userId: string): Promise<void> {
+  const { running } = await billingOf(env.DB, userId);
+  if (running.some((purchase) => purchase.product === "pro_life")) return;
+  for (const id of await runningSubscriptions(env.DB, userId)) {
+    const yearly = await stripe<Subscription>("GET", `subscriptions/${path(id)}`);
+    if (yearly.metadata?.stopped_for !== lifetimeId || !yearly.cancel_at_period_end) continue;
+    if (yearly.status === "canceled" || yearly.status === "incomplete_expired") continue;
+    await stripe("POST", `subscriptions/${path(id)}`, { cancel_at_period_end: false, metadata: { stopped_for: "" } });
+  }
 }
 
 /**
  * Makes the Stripe calls a recorded purchase still needs: the refund of a
- * duplicate, followed until Stripe has made it, or stopping the yearly
- * plans Pro for life replaces, unless it was taken back since. One request
- * at a time takes them on; what is left goes to the next delivery or the
- * hourly run.
+ * duplicate (`refund`, null where the Checkout Session is not at hand, which
+ * leaves it for later), or stopping the yearly plans Pro for life replaces,
+ * or letting them renew again once it was taken back. One request at a time
+ * takes them on; what is left goes to the next delivery or the hourly run.
  */
-async function finishPurchase(session: CheckoutSession, userId: string, now: number, subscription: () => Promise<Subscription | null>) {
-  const work = await takePending(env.DB, session.id, now);
-  if (!work) return;
-  let outcome: "done" | "retry" | "failed" = "done";
-  try {
-    if (work.pending === "refund") outcome = await refundDuplicate(session, await subscription(), work, now);
-    else if (work.refundedAt === null) {
-      for (const yearly of await runningSubscriptions(env.DB, userId)) {
-        await stripe("POST", `subscriptions/${path(yearly)}`, { cancel_at_period_end: true });
-      }
+async function finishPurchase(id: string, userId: string, now: number, refund: (() => Promise<Outcome>) | null): Promise<void> {
+  // The work may change while it is done; what it turned to is taken on next.
+  for (let turn = 0; turn < 3; turn++) {
+    const work = await takePending(env.DB, id, now);
+    if (!work) return;
+    let outcome: Outcome = "done";
+    try {
+      if (work.pending === "refund") outcome = refund ? await refund() : "retry";
+      else if (work.pending === "resume_yearly") await resumeYearly(id, userId);
+      else if (work.refundedAt === null) await stopYearly(id, userId);
+    } catch (error) {
+      await endPending(env.DB, id, work.pending, "retry", now);
+      throw error;
     }
-  } catch (error) {
-    await endPending(env.DB, session.id, "retry");
-    throw error;
+    if (outcome === "failed") console.error("Stripe could not refund a duplicate payment: pay it back by hand", id);
+    await endPending(env.DB, id, work.pending, outcome, now);
+    if (outcome !== "done") return;
   }
-  if (outcome === "failed") console.error("Stripe could not refund a duplicate payment: pay it back by hand", session.id);
-  await endPending(env.DB, session.id, outcome);
 }
 
 /**
@@ -390,11 +423,11 @@ export async function fulfilCheckout(session: CheckoutSession, now: number): Pro
       now,
     });
   }
-  await finishPurchase(session, userId, now, subscription);
+  await finishPurchase(session.id, userId, now, async () => refundDuplicate(session, await subscription(), now));
   return gave;
 }
 
-/** The hourly run: Stripe calls a purchase still needs, left by a request that failed half way. */
+/** The hourly run: Stripe calls a purchase still needs, left by a request that failed half way, or still settling. */
 export async function finishPendingPurchases(now: number): Promise<void> {
   if (!stripeConfigured()) return;
   for (const id of await unfinishedPurchases(env.DB, now, 20)) {
@@ -402,6 +435,18 @@ export async function finishPendingPurchases(now: number): Promise<void> {
       await fulfilCheckout(await stripe<CheckoutSession>("GET", `checkout/sessions/${path(id)}`), now);
     } catch (error) {
       console.error("pending purchase", id, error);
+      await postponePending(env.DB, id, now);
+    }
+  }
+}
+
+/** Ends what a payment taken back bought. Yearly plans that Pro for life stopped renew again, now, or in the hourly run. */
+async function takeBack(paymentIntent: string, now: number): Promise<void> {
+  for (const purchase of await markRefunded(env.DB, paymentIntent, now)) {
+    try {
+      await finishPurchase(purchase.id, purchase.userId, now, null);
+    } catch (error) {
+      console.error("resuming yearly plans", purchase.id, error);
     }
   }
 }
@@ -451,13 +496,13 @@ export async function handleStripeEvent(event: StripeEvent, now: number): Promis
     }
     case "charge.refunded": {
       const paymentIntent = object.payment_intent;
-      if (object.refunded === true && typeof paymentIntent === "string") await markRefunded(env.DB, paymentIntent, now);
+      if (object.refunded === true && typeof paymentIntent === "string") await takeBack(paymentIntent, now);
       return;
     }
     // A chargeback the account lost takes the money back as a refund does.
     case "charge.dispute.closed": {
       const paymentIntent = object.payment_intent;
-      if (object.status === "lost" && typeof paymentIntent === "string") await markRefunded(env.DB, paymentIntent, now);
+      if (object.status === "lost" && typeof paymentIntent === "string") await takeBack(paymentIntent, now);
       return;
     }
   }

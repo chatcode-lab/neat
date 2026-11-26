@@ -216,6 +216,7 @@ describe("plans and payments", () => {
       .bind(NOW, NOW + YEAR)
       .run();
     outbound.push((url, init) => (url.pathname === "/v1/subscriptions/sub_9" && init.method === "POST" ? Response.json({ id: "sub_9" }) : null));
+    outbound.push((url) => (url.pathname === "/v1/subscriptions/sub_9" ? Response.json({ id: "sub_9", status: "active", cancel_at_period_end: false }) : null));
     outbound.push((url) => (url.pathname === "/v1/payment_intents/pi_2" ? Response.json({ id: "pi_2", latest_charge: { refunded: false } }) : null));
     const session = {
       id: "cs_life",
@@ -246,7 +247,7 @@ describe("plans and payments", () => {
   it("refunds a second payment for what the account already has, and keeps a refund that came first", async () => {
     await user("ada");
     await grant("ada", "domains");
-    stripeRefunds();
+    stripeRefunds().paid.pi_dup = 1240;
     outbound.push((url) => (url.pathname === "/v1/payment_intents/pi_back" ? Response.json({ latest_charge: { refunded: true } }) : null));
     outbound.push((url) => (url.pathname === "/v1/payment_intents/pi_dup" ? Response.json({ latest_charge: { refunded: false } }) : null));
     // Disputed and lost: the charge only says disputed, the dispute says lost.
@@ -281,9 +282,9 @@ describe("plans and payments", () => {
       { id: "cs_dup", pending: null },
       { id: "cs_lost", pending: null },
     ]);
-    // Only what Stripe can expand on a payment is asked for.
+    // Only what Stripe can expand on a payment is asked for (and what the duplicate took, to give it all back).
     const intents = sent.filter((call) => call.url.includes("/v1/payment_intents/"));
-    expect(intents.map((call) => new URL(call.url).searchParams.getAll("expand[0]"))).toEqual([["latest_charge"], ["latest_charge"], ["latest_charge"]]);
+    expect(intents.map((call) => new URL(call.url).searchParams.getAll("expand[0]"))).toEqual([["latest_charge"], [], ["latest_charge"], ["latest_charge"]]);
     expect(sent.filter((call) => call.url.endsWith("/v1/refunds"))).toHaveLength(1);
   });
 
@@ -355,25 +356,43 @@ describe("plans and payments", () => {
   /**
    * Stripe's refunds as Stripe keeps them: an idempotency key gets its first
    * answer again, an error included, and a refund may take a while to
-   * succeed, or fail. `failure` sets how the next attempt goes wrong:
+   * succeed, or fail. One made without an amount gives back what is left of
+   * the payment. `paid` is what each payment took (a yearly plan's first
+   * payment unless set). `failure` sets how the next attempt goes wrong:
    * "before" Stripe made anything, or "after" it made the refund.
    */
   function stripeRefunds() {
     const model = {
-      refunds: [] as Array<{ id: string; payment_intent: string; status: string }>,
+      refunds: [] as Array<{ id: string; payment_intent: string; amount: number; status: string; metadata: Record<string, string> }>,
+      paid: {} as Record<string, number>,
       failure: null as "before" | "after" | null,
       status: "succeeded",
     };
+    const paid = (paymentIntent: string) => model.paid[paymentIntent] ?? 6200;
     const answers = new Map<string, { status: number; body: unknown }>();
     outbound.push((url, init) => {
       if (url.pathname === "/v1/refunds" && init.method === "POST") {
         const key = init.headers.get("Idempotency-Key") ?? crypto.randomUUID();
         let kept = answers.get(key);
         if (!kept) {
+          const form = new URLSearchParams(init.body);
+          const paymentIntent = form.get("payment_intent")!;
+          const left =
+            paid(paymentIntent) -
+            model.refunds
+              .filter((refund) => refund.payment_intent === paymentIntent && refund.status !== "failed" && refund.status !== "canceled")
+              .reduce((sum, refund) => sum + refund.amount, 0);
           const failure = model.failure;
           model.failure = null;
-          if (failure !== "before") {
-            const refund = { id: `re_${model.refunds.length + 1}`, payment_intent: new URLSearchParams(init.body).get("payment_intent")!, status: model.status };
+          if (left <= 0) kept = { status: 400, body: { error: { code: "charge_already_refunded", message: "Already refunded" } } };
+          else if (failure !== "before") {
+            const refund = {
+              id: `re_${model.refunds.length + 1}`,
+              payment_intent: paymentIntent,
+              amount: Number(form.get("amount") ?? left),
+              status: model.status,
+              metadata: { checkout_session: form.get("metadata[checkout_session]")! },
+            };
             model.refunds.push(refund);
             kept = failure === "after" ? { status: 500, body: { error: { message: "Something went wrong" } } } : { status: 200, body: refund };
           } else kept = { status: 500, body: { error: { message: "Something went wrong" } } };
@@ -384,12 +403,16 @@ describe("plans and payments", () => {
       if (url.pathname === "/v1/refunds" && init.method === "GET") {
         return Response.json({ data: model.refunds.filter((refund) => refund.payment_intent === url.searchParams.get("payment_intent")) });
       }
-      const one = /^\/v1\/refunds\/(re_\d+)$/.exec(url.pathname);
-      return one ? Response.json(model.refunds.find((refund) => refund.id === one[1])) : null;
+      // What a payment took (one asked for with its charge is answered elsewhere).
+      const intent = /^\/v1\/payment_intents\/(pi_\w+)$/.exec(url.pathname);
+      if (intent && !url.searchParams.has("expand[0]") && (intent[1]!.startsWith("pi_sub_") || intent[1]! in model.paid)) {
+        return Response.json({ id: intent[1], amount_received: paid(intent[1]!) });
+      }
+      return null;
     });
     return model;
   }
-  const work = () => env.DB.prepare(`SELECT pending, refund_id, refunded_at FROM purchases WHERE id = 'cs_late'`).first();
+  const work = () => env.DB.prepare(`SELECT pending, refunded_at FROM purchases WHERE id = 'cs_late'`).first();
   const refundPosts = () => sent.filter((call) => call.url.endsWith("/v1/refunds") && call.method === "POST");
 
   it("follows a duplicate's refund until Stripe has made it, and never makes a second", async () => {
@@ -402,13 +425,13 @@ describe("plans and payments", () => {
     stripeSide.status = "pending";
     stripeSide.failure = "after";
     await expect(fulfilCheckout(yearly("cs_late", "sub_late"), NOW)).rejects.toThrow();
-    expect(await work()).toEqual({ pending: "refund", refund_id: null, refunded_at: NOW });
+    expect(await work()).toEqual({ pending: "refund", refunded_at: NOW });
     // The hourly run finds it, and waits while Stripe is still making it.
     await finishPendingPurchases(NOW + 3600);
-    expect(await work()).toEqual({ pending: "refund", refund_id: "re_1", refunded_at: NOW });
+    expect(await work()).toEqual({ pending: "refund", refunded_at: NOW });
     stripeSide.refunds[0]!.status = "succeeded";
     await finishPendingPurchases(NOW + 7200);
-    expect(await work()).toEqual({ pending: null, refund_id: "re_1", refunded_at: NOW });
+    expect(await work()).toEqual({ pending: null, refunded_at: NOW });
     // Done is done: neither the hourly run nor another delivery refunds again.
     await finishPendingPurchases(NOW + 10800);
     await fulfilCheckout(yearly("cs_late", "sub_late"), NOW + 10800);
@@ -430,7 +453,8 @@ describe("plans and payments", () => {
     const keys = refundPosts().map((call) => call.key);
     expect(keys).toHaveLength(2);
     expect(new Set(keys).size).toBe(2);
-    expect(await work()).toMatchObject({ pending: "refund", refund_id: "re_1" });
+    expect(await work()).toMatchObject({ pending: "refund" });
+    expect(stripeSide.refunds).toHaveLength(1);
     // Stripe accepted the refund, then failed it (a closed card): no more tries.
     stripeSide.refunds[0]!.status = "failed";
     const errors = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -442,6 +466,54 @@ describe("plans and payments", () => {
     expect(sent).toEqual([]);
   });
 
+  it("gives back the rest of a duplicate payment already partly refunded by hand", async () => {
+    await user("ada");
+    await grant("ada", "pro_life");
+    subscriptions();
+    const stripeSide = stripeRefunds();
+    // $5 of the duplicate's $62 was given back by hand before it was found.
+    stripeSide.refunds.push({ id: "re_hand", payment_intent: "pi_sub_part", amount: 500, status: "succeeded", metadata: {} });
+    expect(await fulfilCheckout(yearly("cs_part", "sub_part"), NOW)).toBe(false);
+    expect(stripeSide.refunds.map((refund) => [refund.id, refund.amount, refund.metadata.checkout_session])).toEqual([
+      ["re_hand", 500, undefined],
+      ["re_2", 5700, "cs_part"],
+    ]);
+    expect(await env.DB.prepare(`SELECT pending FROM purchases WHERE id = 'cs_part'`).first("pending")).toBeNull();
+  });
+
+  it("gives newer work its turn in the hourly run while older refunds settle or keep failing", async () => {
+    await user("ada");
+    await grant("ada", "pro_life");
+    subscriptions();
+    const stripeSide = stripeRefunds();
+    stripeSide.status = "pending";
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    // Twenty duplicates: half with refunds Stripe takes days over, half whose session Stripe will not show.
+    for (let index = 0; index < 20; index++) {
+      await env.DB.prepare(
+        `INSERT INTO purchases (id, user_id, product, subscription_id, created_at, refunded_at, pending) VALUES (?1, 'ada', 'pro_year', ?2, ?3, ?3, 'refund')`,
+      )
+        .bind(`cs_old${index}`, `sub_old${index}`, NOW - 3600 + index)
+        .run();
+    }
+    outbound.push((url) => {
+      const id = /^\/v1\/checkout\/sessions\/(cs_\w+)$/.exec(url.pathname)?.[1];
+      if (!id) return null;
+      if (Number(id.replace("cs_old", "")) % 2 === 1) return Response.json({ error: { message: "Try again" } }, { status: 500 });
+      return Response.json(yearly(id, `sub_${id.slice(3)}`));
+    });
+    await finishPendingPurchases(NOW);
+    expect(refundPosts()).toHaveLength(10);
+    // A newer duplicate, still to refund: the next run takes it on.
+    await env.DB.prepare(
+      `INSERT INTO purchases (id, user_id, product, subscription_id, created_at, refunded_at, pending) VALUES ('cs_new', 'ada', 'pro_year', 'sub_new', ?1, ?1, 'refund')`,
+    )
+      .bind(NOW + 60)
+      .run();
+    await finishPendingPurchases(NOW + 3600);
+    expect(stripeSide.refunds.map((refund) => refund.payment_intent)).toContain("pi_sub_new");
+  });
+
   it("leaves the yearly plan renewing when Pro for life is taken back before it was stopped", async () => {
     await user("ada");
     await env.DB.prepare(`INSERT INTO purchases (id, user_id, product, subscription_id, created_at, ends_at) VALUES ('cs_year', 'ada', 'pro_year', 'sub_9', ?1, ?2)`)
@@ -451,6 +523,7 @@ describe("plans and payments", () => {
     outbound.push((url, init) =>
       url.pathname === "/v1/subscriptions/sub_9" && init.method === "POST" ? Response.json({ error: { message: "Try again" } }, { status: 500 }) : null,
     );
+    outbound.push((url) => (url.pathname === "/v1/subscriptions/sub_9" ? Response.json({ id: "sub_9", status: "active", cancel_at_period_end: false }) : null));
     const life = { ...yearly("cs_life", "unused"), mode: "payment", subscription: null, payment_intent: "pi_life", metadata: { product: "pro_life" } };
     outbound.push((url) => (url.pathname === "/v1/checkout/sessions/cs_life" ? Response.json(life) : null));
     await expect(fulfilCheckout(life, NOW)).rejects.toThrow();
@@ -461,13 +534,67 @@ describe("plans and payments", () => {
     expect((await stripeWebhook({ request: new Request(`${ORIGIN}/stripe/webhook`, { method: "POST", headers, body }) } as never)).status).toBe(200);
     expect(await env.DB.prepare(`SELECT pending FROM purchases WHERE id = 'cs_life'`).first("pending")).toBeNull();
     // And should the work still be there, it is checked first.
-    await env.DB.prepare(`UPDATE purchases SET pending = 'stop_yearly', pending_lock = NULL WHERE id = 'cs_life'`).run();
+    await env.DB.prepare(`UPDATE purchases SET pending = 'stop_yearly', pending_at = NULL WHERE id = 'cs_life'`).run();
     const tries = () => sent.filter((call) => call.url.endsWith("/v1/subscriptions/sub_9") && call.method === "POST").length;
     const before = tries();
     await finishPendingPurchases(NOW + 3600);
     expect(tries()).toBe(before);
     expect(await env.DB.prepare(`SELECT pending FROM purchases WHERE id = 'cs_life'`).first("pending")).toBeNull();
     expect((await billingOf(env.DB, "ada")).running.map((purchase) => purchase.id)).toEqual(["cs_year"]);
+  });
+
+  it("lets the yearly plan renew again when Pro for life is taken back while the plan is being stopped", async () => {
+    await user("ada");
+    await env.DB.prepare(`INSERT INTO purchases (id, user_id, product, subscription_id, created_at, ends_at) VALUES ('cs_year', 'ada', 'pro_year', 'sub_9', ?1, ?2)`)
+      .bind(NOW, NOW + YEAR)
+      .run();
+    const plan = { id: "sub_9", status: "active", cancel_at_period_end: false, metadata: {} as Record<string, string> };
+    const life = { ...yearly("cs_life", "unused"), mode: "payment", subscription: null, payment_intent: "pi_life", metadata: { product: "pro_life" } };
+    // The refund of Pro for life arrives while Stripe is stopping the yearly plan.
+    let duringStop: (() => Promise<void>) | null = async () => {
+      const body = JSON.stringify({ id: "evt_r", type: "charge.refunded", data: { object: { refunded: true, payment_intent: "pi_life" } } });
+      const headers = { "Stripe-Signature": await signStripePayload(body, env.STRIPE_WEBHOOK_SECRET, NOW) };
+      expect((await stripeWebhook({ request: new Request(`${ORIGIN}/stripe/webhook`, { method: "POST", headers, body }) } as never)).status).toBe(200);
+    };
+    outbound.push(async (url, init) => {
+      if (url.pathname !== "/v1/subscriptions/sub_9") return null;
+      if (init.method === "POST") {
+        const during = duringStop;
+        duringStop = null;
+        await during?.();
+        const form = new URLSearchParams(init.body);
+        plan.cancel_at_period_end = form.get("cancel_at_period_end") === "true";
+        const stoppedFor = form.get("metadata[stopped_for]");
+        if (stoppedFor) plan.metadata.stopped_for = stoppedFor;
+        else if (stoppedFor === "") delete plan.metadata.stopped_for;
+      }
+      return Response.json(plan);
+    });
+    outbound.push((url) => (url.pathname === "/v1/payment_intents/pi_life" ? Response.json({ latest_charge: { refunded: false } }) : null));
+    expect(await fulfilCheckout(life, NOW)).toBe(true);
+    const updates = sent.filter((call) => call.url.endsWith("/v1/subscriptions/sub_9") && call.method === "POST");
+    expect(updates.map((call) => new URLSearchParams(call.body).get("cancel_at_period_end"))).toEqual(["true", "false"]);
+    expect(plan).toMatchObject({ cancel_at_period_end: false, metadata: {} });
+    expect(await env.DB.prepare(`SELECT pending FROM purchases WHERE id = 'cs_life'`).first("pending")).toBeNull();
+    expect((await billingOf(env.DB, "ada")).running.map((purchase) => purchase.id)).toEqual(["cs_year"]);
+  });
+
+  it("leaves a yearly plan its owner stopped as it is, through Pro for life and its refund", async () => {
+    await user("ada");
+    await env.DB.prepare(`INSERT INTO purchases (id, user_id, product, subscription_id, created_at, ends_at) VALUES ('cs_year', 'ada', 'pro_year', 'sub_own', ?1, ?2)`)
+      .bind(NOW, NOW + YEAR)
+      .run();
+    outbound.push((url) =>
+      url.pathname === "/v1/subscriptions/sub_own" ? Response.json({ id: "sub_own", status: "active", cancel_at_period_end: true, metadata: {} }) : null,
+    );
+    outbound.push((url) => (url.pathname === "/v1/payment_intents/pi_life" ? Response.json({ latest_charge: { refunded: false } }) : null));
+    const life = { ...yearly("cs_life", "unused"), mode: "payment", subscription: null, payment_intent: "pi_life", metadata: { product: "pro_life" } };
+    expect(await fulfilCheckout(life, NOW)).toBe(true);
+    const body = JSON.stringify({ id: "evt_r", type: "charge.refunded", data: { object: { refunded: true, payment_intent: "pi_life" } } });
+    const headers = { "Stripe-Signature": await signStripePayload(body, env.STRIPE_WEBHOOK_SECRET, NOW) };
+    expect((await stripeWebhook({ request: new Request(`${ORIGIN}/stripe/webhook`, { method: "POST", headers, body }) } as never)).status).toBe(200);
+    expect(sent.filter((call) => call.url.endsWith("/v1/subscriptions/sub_own") && call.method === "POST")).toEqual([]);
+    expect(await env.DB.prepare(`SELECT pending FROM purchases WHERE id = 'cs_life'`).first("pending")).toBeNull();
   });
 
   it("takes back what a lost chargeback paid for", async () => {
@@ -819,6 +946,55 @@ describe("own domains", () => {
         expect(deletedAtCloudflare()).toEqual([]);
         expect((await api(ada, "DELETE", "sites/adapage/domain")).status).toBe(200);
         expect(deletedAtCloudflare()).toEqual(["ch_1"]);
+      },
+    );
+  });
+
+  it("keep a shared hostname listed when the last claim lets go while the one before it is cleared", async () => {
+    const ada = await user("ada");
+    const bob = await user("bob");
+    await grant("ada", "domains");
+    await grant("bob", "domains");
+    await api(ada, "POST", "sites", { handle: "adapage", published: true });
+    await api(bob, "POST", "sites", { handle: "bobpage", published: true });
+    dns["ada-lovelace.com"] = godaddy;
+    dns["www.ada-lovelace.com"] = {};
+    let cloudflareDown = false;
+    await withSaas(
+      (_url, init) =>
+        init.method === "DELETE" && cloudflareDown
+          ? Response.json({ success: false, errors: [{ code: 1000, message: "down" }] }, { status: 500 })
+          : Response.json({ success: true, result: { id: "ch_1" } }),
+      async () => {
+        await api(ada, "PUT", "sites/adapage/domain", { hostname: "www.ada-lovelace.com" });
+        await api(bob, "PUT", "sites/bobpage/domain", { hostname: "www.ada-lovelace.com" });
+        await env.DB.prepare(`UPDATE domains SET cf_id = 'ch_1'`).run();
+        vi.spyOn(console, "error").mockImplementation(() => {});
+        // Bob lets go; Ada's claim holds the hostname, but she lets go too
+        // (with Cloudflare down) just before Bob's entry is cleared.
+        const prepare = env.DB.prepare.bind(env.DB);
+        let meanwhile: (() => Promise<void>) | null = async () => {
+          cloudflareDown = true;
+          expect((await api(ada, "DELETE", "sites/adapage/domain")).status).toBe(200);
+        };
+        vi.spyOn(env.DB, "prepare").mockImplementation((query: string) => {
+          const statement = prepare(query);
+          const before = meanwhile;
+          if (!before || !query.startsWith("DELETE FROM stale_hostnames")) return statement;
+          meanwhile = null;
+          return {
+            bind: (...values: unknown[]) => {
+              const bound = statement.bind(...values);
+              return { run: async () => (await before(), bound.run()) };
+            },
+          } as unknown as D1PreparedStatement;
+        });
+        expect((await api(bob, "DELETE", "sites/bobpage/domain")).status).toBe(200);
+        expect(await env.DB.prepare(`SELECT cf_id FROM stale_hostnames`).first("cf_id")).toBe("ch_1");
+        cloudflareDown = false;
+        await checkDomains(NOW + 3600);
+        expect(deletedAtCloudflare().at(-1)).toBe("ch_1");
+        expect(await env.DB.prepare(`SELECT count(*) AS left FROM stale_hostnames`).first("left")).toBe(0);
       },
     );
   });
