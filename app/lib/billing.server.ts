@@ -3,12 +3,14 @@ import { env } from "cloudflare:workers";
 import { StripeError, stripe, stripeConfigured } from "./billing/stripe.server";
 import type { Account } from "./db/accounts.server";
 import {
+  askYearlySync,
   type Billing,
   billingOf,
   claimPurchase,
   endPending,
   finishCheckout,
   markRefunded,
+  noteWrite,
   type PendingWork,
   purchaseExists,
   renewalWork,
@@ -16,6 +18,7 @@ import {
   setSubscriptionEnd,
   takePending,
   unfinishedPurchases,
+  yearlyPlanOf,
 } from "./db/billing.server";
 import { mediaUsage } from "./db/media.server";
 import { siteCounts } from "./db/sites.server";
@@ -334,22 +337,67 @@ async function refundDuplicate(session: CheckoutSession, subscription: Subscript
 /** Marks a yearly plan's renewal as turned off by neat.link for Pro for life, not by its owner. */
 const STOPPED_FOR = "stopped_for";
 
+/** What neat.link changes about a yearly plan's renewal: off for Pro for life, or on again. */
+const RENEWAL_CHANGES = {
+  stop: { cancel_at_period_end: true, metadata: { [STOPPED_FOR]: "pro_life" } },
+  resume: { cancel_at_period_end: false, metadata: { [STOPPED_FOR]: "" } },
+};
+type RenewalChange = keyof typeof RENEWAL_CHANGES;
+
 /**
- * Sets a yearly plan's renewal from what the account has now: off while it
- * has Pro for life, marked as turned off for it; on again once it has not,
- * if it was turned off for it. One its owner turned off stays off.
+ * The change a yearly plan's renewal needs, given whether the account has
+ * Pro for life: off while it has, marked as turned off for it; on again
+ * once it has not, if it was turned off for it. One its owner turned off
+ * stays off.
  */
-async function syncRenewal(userId: string, subscriptionId: string): Promise<void> {
-  const { running } = await billingOf(env.DB, userId);
-  const lifetime = running.some((purchase) => purchase.product === "pro_life");
-  const yearly = await stripe<Subscription>("GET", `subscriptions/${path(subscriptionId)}`);
-  if (yearly.status === "canceled" || yearly.status === "incomplete_expired") return;
-  const ours = yearly.metadata?.[STOPPED_FOR] === "pro_life";
-  if (lifetime && !yearly.cancel_at_period_end) {
-    await stripe("POST", `subscriptions/${path(subscriptionId)}`, { cancel_at_period_end: true, metadata: { [STOPPED_FOR]: "pro_life" } });
-  } else if (!lifetime && ours) {
-    await stripe("POST", `subscriptions/${path(subscriptionId)}`, { cancel_at_period_end: false, metadata: { [STOPPED_FOR]: "" } });
+function renewalChange(yearly: Subscription, lifetime: boolean): RenewalChange | null {
+  if (yearly.status === "canceled" || yearly.status === "incomplete_expired") return null;
+  if (lifetime && !yearly.cancel_at_period_end) return "stop";
+  if (!lifetime && yearly.metadata?.[STOPPED_FOR] === "pro_life") return "resume";
+  return null;
+}
+
+/**
+ * Sends a renewal change under its idempotency key (renewal-<change>-…).
+ * "made", or "refused" by Stripe: either way nothing under the key is at
+ * work any more, so what Stripe has now is all it did. "unknown" when no
+ * answer came, or the key's first request is still at work (409) or Stripe
+ * did not let this one in (429): the change may yet happen, so it is sent
+ * again under the same key before anything else is done.
+ */
+async function sendRenewalChange(subscriptionId: string, key: string): Promise<"made" | "refused" | "unknown"> {
+  const change: RenewalChange = key.startsWith("renewal-stop-") ? "stop" : "resume";
+  try {
+    await stripe("POST", `subscriptions/${path(subscriptionId)}`, RENEWAL_CHANGES[change], { idempotencyKey: key });
+    return "made";
+  } catch (error) {
+    if (error instanceof StripeError && error.status !== 409 && error.status !== 429) return "refused";
+    console.error("yearly plan renewal change not answered yet", subscriptionId, error);
+    return "unknown";
   }
+}
+
+/**
+ * Sets a yearly plan's renewal from what the account has now. A change
+ * sent before whose answer was lost is first sent again under its key,
+ * until Stripe says what it did, so no change still on its way can undo
+ * this one; each change is noted under its key before it is sent.
+ */
+async function syncRenewal(id: string, work: PendingWork, subscriptionId: string): Promise<Outcome> {
+  if (work.write) {
+    if ((await sendRenewalChange(subscriptionId, work.write)) === "unknown") return "retry";
+    if (!(await noteWrite(env.DB, id, work, null))) return "retry";
+  }
+  const { running } = await billingOf(env.DB, work.userId);
+  const lifetime = running.some((purchase) => purchase.product === "pro_life");
+  const change = renewalChange(await stripe<Subscription>("GET", `subscriptions/${path(subscriptionId)}`), lifetime);
+  if (!change) return "done";
+  const key = `renewal-${change}-${work.lease}`;
+  if (!(await noteWrite(env.DB, id, work, key))) return "retry";
+  const sent = await sendRenewalChange(subscriptionId, key);
+  if (sent === "unknown") return "retry";
+  if (!(await noteWrite(env.DB, id, work, null))) return "retry";
+  return sent === "made" ? "done" : "retry";
 }
 
 const clock = () => Math.floor(Date.now() / 1000);
@@ -369,7 +417,7 @@ async function finishWork(id: string, refund: ((attempt: string) => Promise<Outc
     let outcome: Outcome = "done";
     try {
       if (work.pending === "refund") outcome = refund ? await refund(work.lease) : "retry";
-      else if (work.subscriptionId) await syncRenewal(work.userId, work.subscriptionId);
+      else if (work.subscriptionId) outcome = await syncRenewal(id, work, work.subscriptionId);
     } catch (error) {
       await endPending(env.DB, id, work, "retry", clock());
       throw error;
@@ -495,6 +543,10 @@ export async function handleStripeEvent(event: StripeEvent, now: number): Promis
       const id = String(object.id ?? "");
       const subscription = await stripe<Subscription>("GET", `subscriptions/${encodeURIComponent(id)}`);
       await setSubscriptionEnd(env.DB, subscription.id, subscriptionEnd(subscription, now));
+      // A change Stripe made late, or a plan paid again after it lapsed, can
+      // leave its renewal at odds with Pro for life: set it again.
+      const yearly = await yearlyPlanOf(env.DB, subscription.id);
+      if (yearly && renewalChange(subscription, yearly.lifetime)) await syncRenewals(await askYearlySync(env.DB, yearly.id));
       return;
     }
     case "charge.refunded": {

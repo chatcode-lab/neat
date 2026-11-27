@@ -11,6 +11,7 @@ import {
   dropDomain,
   forgetHeldHostname,
   hostnameDeleted,
+  letGoOfHostname,
   orphanedHostnames,
   pruneDeletedHostnames,
   queueStaleHostname,
@@ -150,12 +151,11 @@ export async function checkDomain(record: DomainRecord, now: number, entitled: b
     await save({});
     return;
   }
-  // The claim's hostname goes on the list to delete before the claim lets go of it, so it is never left unlisted.
+  // The claim's hostname goes on the list to delete as the claim lets go of it, in one transaction, so it is never left unlisted.
   const letGo = async (error: string, stalled = false) => {
-    if (record.cfId) await queueStaleHostname(env.DB, record.cfId, record.hostname, now);
-    await save({
+    const changes = {
+      checkedAt: now,
       status: "pending",
-      cfId: null,
       sslStatus: null,
       registeredAt: null,
       cfHttpPath: null,
@@ -164,8 +164,13 @@ export async function checkDomain(record: DomainRecord, now: number, entitled: b
       lostAt: null,
       stalledAt: stalled ? now : null,
       error,
-    });
-    if (record.cfId) await releaseStale([record.cfId]);
+    } as const;
+    if (!record.cfId) {
+      await save({ ...changes, cfId: null });
+      return;
+    }
+    await letGoOfHostname(env.DB, record.siteId, record.code, { cfId: record.cfId, name: record.hostname }, changes);
+    await releaseStale([record.cfId]);
   };
   /** Something that worked has stopped: a week later it is let go. */
   const lose = async (why: string, changes: Parameters<typeof saveDomainCheck>[3] = {}) => {

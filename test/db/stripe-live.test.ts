@@ -204,6 +204,22 @@ describe.skipIf(!live)("Stripe test mode", () => {
       expect(resumed.metadata.stopped_for).toBeUndefined();
       expect(await purchase(id)).toMatchObject({ refunded_at: expect.any(Number), pending: null });
       expect(await purchase("cs_live_year")).toMatchObject({ pending: null });
+
+      // A change sent again under its idempotency key is answered as the first was, and not made again.
+      const key = `renewal-stop-live-${Date.now().toString(36)}`;
+      const stop = { cancel_at_period_end: true, metadata: { stopped_for: "pro_life" } };
+      await stripe("POST", `subscriptions/${subscription.id}`, stop, { idempotencyKey: key });
+      await stripe("POST", `subscriptions/${subscription.id}`, { cancel_at_period_end: false, metadata: { stopped_for: "" } });
+      expect(await stripe<Plan>("POST", `subscriptions/${subscription.id}`, stop, { idempotencyKey: key })).toMatchObject({ cancel_at_period_end: true });
+      expect((await stripe<Plan>("GET", `subscriptions/${subscription.id}`)).cancel_at_period_end).toBe(false);
+
+      // Stripe tells of the plan renewing while the account has Pro for life: it is stopped again.
+      await env.DB.prepare(`INSERT INTO purchases (id, user_id, product, created_at) VALUES ('cs_live_life_kept', ?1, 'pro_life', unixepoch())`)
+        .bind(account.id)
+        .run();
+      await handleStripeEvent({ id: "evt_live_sub", type: "customer.subscription.updated", data: { object: { id: subscription.id } } }, now());
+      expect(await stripe<Plan>("GET", `subscriptions/${subscription.id}`)).toMatchObject({ cancel_at_period_end: true, metadata: { stopped_for: "pro_life" } });
+      expect(await purchase("cs_live_year")).toMatchObject({ pending: null });
     } finally {
       await stripe("DELETE", `customers/${customer.id}`);
     }

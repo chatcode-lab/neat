@@ -517,34 +517,63 @@ describe("plans and payments", () => {
   /**
    * A yearly plan at Stripe: whether it renews, and what neat.link turned
    * that off for. `during` runs while the next update is on its way, before
-   * Stripe makes it; `fail` fails the next update.
+   * Stripe makes it; `fail` fails the next update; `lose` loses the next
+   * update's answer, and Stripe makes it only at `land()`. An update's
+   * idempotency key is answered as Stripe does: its first answer again, or
+   * 409 while its first request is still at work.
    */
-  function yearlyPlan(id: string, start: { cancel_at_period_end?: boolean } = {}) {
+  function yearlyPlan(id: string, start: { cancel_at_period_end?: boolean; status?: string } = {}) {
     const plan = {
+      status: start.status ?? "active",
       cancel_at_period_end: start.cancel_at_period_end ?? false,
       metadata: {} as Record<string, string>,
       updates: [] as string[],
       during: null as (() => Promise<void>) | null,
       fail: false,
+      lose: false,
+      land: null as (() => void) | null,
     };
+    const answers = new Map<string, { status: number; body: unknown }>();
+    let atWork: string | null = null;
+    const current = () => ({ id, status: plan.status, cancel_at_period_end: plan.cancel_at_period_end, metadata: { ...plan.metadata } });
     outbound.push(async (url, init) => {
       if (url.pathname !== `/v1/subscriptions/${id}`) return null;
-      if (init.method === "POST") {
-        const during = plan.during;
-        plan.during = null;
-        await during?.();
-        if (plan.fail) {
-          plan.fail = false;
-          return Response.json({ error: { message: "Try again" } }, { status: 500 });
-        }
+      if (init.method !== "POST") return Response.json(current());
+      const key = init.headers.get("Idempotency-Key");
+      if (key && key === atWork) return Response.json({ error: { code: "idempotency_key_in_use", message: "In use" } }, { status: 409 });
+      const known = key ? answers.get(key) : undefined;
+      if (known) return Response.json(known.body, { status: known.status });
+      const during = plan.during;
+      plan.during = null;
+      await during?.();
+      const answer = (status: number, body: unknown) => {
+        if (key) answers.set(key, { status, body });
+        return Response.json(body, { status });
+      };
+      if (plan.fail) {
+        plan.fail = false;
+        return answer(500, { error: { message: "Try again" } });
+      }
+      const make = () => {
         const form = new URLSearchParams(init.body);
         plan.cancel_at_period_end = form.get("cancel_at_period_end") === "true";
         plan.updates.push(form.get("cancel_at_period_end")!);
         const stoppedFor = form.get("metadata[stopped_for]");
         if (stoppedFor) plan.metadata.stopped_for = stoppedFor;
         else if (stoppedFor === "") delete plan.metadata.stopped_for;
+        return answer(200, current());
+      };
+      if (plan.lose) {
+        plan.lose = false;
+        atWork = key;
+        plan.land = () => {
+          atWork = null;
+          plan.land = null;
+          make();
+        };
+        throw new TypeError("Network connection lost.");
       }
-      return Response.json({ id, status: "active", cancel_at_period_end: plan.cancel_at_period_end, metadata: plan.metadata });
+      return make();
     });
     return plan;
   }
@@ -563,6 +592,11 @@ describe("plans and payments", () => {
     expect((await stripeWebhook({ request: new Request(`${ORIGIN}/stripe/webhook`, { method: "POST", headers, body }) } as never)).status).toBe(200);
   }
   const renewalWorkLeft = () => env.DB.prepare(`SELECT pending FROM purchases WHERE id = 'cs_year'`).first("pending");
+  async function subscriptionUpdated(id: string) {
+    const body = JSON.stringify({ id: `evt_${id}_${sent.length}`, type: "customer.subscription.updated", data: { object: { id } } });
+    const headers = { "Stripe-Signature": await signStripePayload(body, env.STRIPE_WEBHOOK_SECRET, NOW) };
+    expect((await stripeWebhook({ request: new Request(`${ORIGIN}/stripe/webhook`, { method: "POST", headers, body }) } as never)).status).toBe(200);
+  }
 
   it("leaves the yearly plan renewing when Pro for life is taken back before it was stopped", async () => {
     await user("ada");
@@ -649,6 +683,58 @@ describe("plans and payments", () => {
     await refunded("pi_cs_life");
     expect(plan.updates).toEqual([]);
     expect(plan.cancel_at_period_end).toBe(true);
+    expect(await renewalWorkLeft()).toBeNull();
+  });
+
+  it("never lets a change to the yearly plan whose answer was lost undo a later one", async () => {
+    await user("ada");
+    await hasYearly();
+    const plan = yearlyPlan("sub_9");
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(await fulfilCheckout(lifetime("cs_life"), NOW)).toBe(true);
+    // Refunded: letting the plan renew is sent, but its answer is lost, and Stripe makes it only later.
+    plan.lose = true;
+    await refunded("pi_cs_life");
+    expect(plan.cancel_at_period_end).toBe(true);
+    // Pro for life is bought again meanwhile: stopping the plan waits for Stripe to answer for that change.
+    expect(await fulfilCheckout(lifetime("cs_again"), NOW)).toBe(true);
+    expect(await renewalWorkLeft()).toBe("sync_renewal");
+    plan.land!();
+    expect(plan.cancel_at_period_end).toBe(false);
+    await finishPendingPurchases(NOW + 3600);
+    expect(plan.updates).toEqual(["true", "false", "true"]);
+    expect(plan).toMatchObject({ cancel_at_period_end: true, metadata: { stopped_for: "pro_life" } });
+    expect(await renewalWorkLeft()).toBeNull();
+  });
+
+  it("sets a yearly plan's renewal again whenever Stripe tells of one at odds with Pro for life", async () => {
+    await user("ada");
+    await hasYearly();
+    await env.DB.prepare(`INSERT INTO purchases (id, user_id, product, payment_intent_id, created_at) VALUES ('cs_life', 'ada', 'pro_life', 'pi_cs_life', ?1)`)
+      .bind(NOW)
+      .run();
+    const plan = yearlyPlan("sub_9");
+    await subscriptionUpdated("sub_9");
+    expect(plan).toMatchObject({ cancel_at_period_end: true, metadata: { stopped_for: "pro_life" } });
+    // Told of it again, now stopped: nothing more is changed.
+    await subscriptionUpdated("sub_9");
+    expect(plan.updates).toEqual(["true"]);
+    expect(await renewalWorkLeft()).toBeNull();
+  });
+
+  it("stops a lapsed yearly plan renewing once Pro for life is bought, in case it is paid after all", async () => {
+    await user("ada");
+    // Its renewal went unpaid past the grace: no longer the account's plan, but Stripe still tries.
+    await env.DB.prepare(`INSERT INTO purchases (id, user_id, product, subscription_id, created_at, ends_at) VALUES ('cs_year', 'ada', 'pro_year', 'sub_9', ?1, ?2)`)
+      .bind(NOW - YEAR, NOW - 3600)
+      .run();
+    const plan = yearlyPlan("sub_9", { status: "past_due" });
+    expect(await fulfilCheckout(lifetime("cs_life"), NOW)).toBe(true);
+    expect(plan).toMatchObject({ cancel_at_period_end: true, metadata: { stopped_for: "pro_life" } });
+    // Paid after all: it runs to the end of the year paid for, and stops there.
+    plan.status = "active";
+    await subscriptionUpdated("sub_9");
+    expect(plan.updates).toEqual(["true"]);
     expect(await renewalWorkLeft()).toBeNull();
   });
 
@@ -1108,6 +1194,57 @@ describe("own domains", () => {
         // The next check makes the name's hostname anew.
         await checkDomain((await domainOf(env.DB, bobSite))!, NOW, true, true);
         expect(await domainOf(env.DB, bobSite)).toMatchObject({ cfId: "ch_2", status: "active" });
+      },
+    );
+  });
+
+  it("keep a hostname listed when the hourly cleanup runs as its claim lets go of it", async () => {
+    const token = await user("ada");
+    await api(token, "POST", "sites", { handle: "adapage", published: true });
+    await grant("ada", "domains");
+    const siteId = (await siteByHandle(env.DB, "adapage"))!.id;
+    dns["ada-lovelace.com"] = godaddy;
+    dns["www.ada-lovelace.com"] = {};
+    await withSaas(
+      (url) => Response.json({ success: true, result: { id: url.pathname.split("/").pop() } }),
+      async () => {
+        await api(token, "PUT", "sites/adapage/domain", { hostname: "www.ada-lovelace.com" });
+        await env.DB.prepare(`UPDATE domains SET status = 'active', cf_id = 'ch_1', checked_at = ?2 WHERE site_id = ?1`).bind(siteId, NOW).run();
+        const record = (await domainOf(env.DB, siteId))!;
+        // The plan ended. The hourly cleanup runs as soon as it can once the
+        // hostname is put on the list: before the claim is saved, or before
+        // the transaction that does both.
+        const prepare = env.DB.prepare.bind(env.DB);
+        const batch = env.DB.batch.bind(env.DB);
+        let listed = false;
+        let meanwhile: (() => Promise<void>) | null = () => checkDomains(NOW);
+        const cleanup = async () => {
+          const before = meanwhile;
+          meanwhile = null;
+          await before?.();
+        };
+        vi.spyOn(env.DB, "prepare").mockImplementation((query: string) => {
+          if (query.startsWith("INSERT INTO stale_hostnames")) listed = true;
+          const statement = prepare(query);
+          if (!meanwhile || !listed || !query.startsWith("UPDATE domains SET")) return statement;
+          const bind = statement.bind.bind(statement);
+          statement.bind = (...values: unknown[]) => {
+            const bound = bind(...values);
+            const run = bound.run.bind(bound);
+            bound.run = async () => (await cleanup(), run()) as never;
+            return bound;
+          };
+          return statement;
+        });
+        vi.spyOn(env.DB, "batch").mockImplementation(async (statements) => {
+          if (listed) await cleanup();
+          return batch(statements);
+        });
+        await checkDomain(record, NOW, false);
+        expect(meanwhile).toBeNull();
+        expect(await domainOf(env.DB, siteId)).toMatchObject({ cfId: null, status: "pending" });
+        expect(deletedAtCloudflare()).toEqual(["ch_1"]);
+        expect(await env.DB.prepare(`SELECT count(*) AS left FROM stale_hostnames WHERE deleted_at IS NULL`).first("left")).toBe(0);
       },
     );
   });

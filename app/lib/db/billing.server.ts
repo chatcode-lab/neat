@@ -142,15 +142,16 @@ export async function claimPurchase(db: D1Database, purchase: NewPurchase): Prom
 }
 
 /**
- * Asks for the yearly plans of the accounts `owners` picks to have their
- * renewal set again from what the account has now (see renewalWork). Each
- * ask counts up pending_rev, so a request already at it does it once more.
+ * Asks for the yearly plans `rows` picks to have their renewal set again
+ * from what the account has now (see renewalWork). Each ask counts up
+ * pending_rev, so a request already at it does it once more. One past its
+ * grace is asked too: unpaid, it may yet be paid and renew.
  */
-const askRenewalSync = (db: D1Database, owners: string, value: string) =>
+const askRenewalSync = (db: D1Database, rows: string, value: string) =>
   db
     .prepare(
       `UPDATE purchases SET pending = 'sync_renewal', pending_rev = pending_rev + 1
-       WHERE ${owners} AND subscription_id IS NOT NULL AND ${RUNNING} AND (pending IS NULL OR pending = 'sync_renewal')
+       WHERE ${rows} AND subscription_id IS NOT NULL AND refunded_at IS NULL AND (pending IS NULL OR pending = 'sync_renewal')
        RETURNING id`,
     )
     .bind(value);
@@ -173,6 +174,8 @@ export interface PendingWork {
   rev: number;
   userId: string;
   subscriptionId: string | null;
+  /** The idempotency key of a renewal change sent to Stripe whose answer is not known yet. */
+  write: string | null;
 }
 
 /**
@@ -186,11 +189,23 @@ export async function takePending(db: D1Database, id: string, now: number): Prom
     .prepare(
       `UPDATE purchases SET pending_at = ?2 + ${PENDING_LEASE_SECONDS}, pending_lease = ?3
        WHERE id = ?1 AND ${OPEN_WORK} AND coalesce(pending_at, 0) <= ?2
-       RETURNING pending, pending_rev, user_id, subscription_id`,
+       RETURNING pending, pending_rev, user_id, subscription_id, pending_write`,
     )
     .bind(id, now, lease)
-    .first<{ pending: PendingWork["pending"]; pending_rev: number; user_id: string; subscription_id: string | null }>();
-  return row ? { pending: row.pending, lease, rev: row.pending_rev, userId: row.user_id, subscriptionId: row.subscription_id } : null;
+    .first<{ pending: PendingWork["pending"]; pending_rev: number; user_id: string; subscription_id: string | null; pending_write: string | null }>();
+  return row
+    ? { pending: row.pending, lease, rev: row.pending_rev, userId: row.user_id, subscriptionId: row.subscription_id, write: row.pending_write }
+    : null;
+}
+
+/**
+ * Notes a renewal change about to be sent to Stripe under its idempotency
+ * key, until its answer is known (null once it is). False when the request
+ * no longer holds the work, which then is not its to do.
+ */
+export async function noteWrite(db: D1Database, id: string, work: PendingWork, key: string | null): Promise<boolean> {
+  const result = await db.prepare(`UPDATE purchases SET pending_write = ?3 WHERE id = ?1 AND pending_lease = ?2`).bind(id, work.lease, key).run();
+  return result.meta.changes > 0;
 }
 
 /**
@@ -237,6 +252,24 @@ export async function renewalWork(db: D1Database, userId: string): Promise<strin
     .prepare(`SELECT id FROM purchases WHERE user_id = ?1 AND pending = 'sync_renewal'`)
     .bind(userId)
     .all<{ id: string }>();
+  return results.map((row) => row.id);
+}
+
+/** The yearly plan a subscription pays for, with whether its account has Pro for life now. */
+export async function yearlyPlanOf(db: D1Database, subscriptionId: string): Promise<{ id: string; lifetime: boolean } | null> {
+  const row = await db
+    .prepare(
+      `SELECT id, EXISTS (SELECT 1 FROM purchases AS life WHERE life.user_id = yearly.user_id AND life.product = 'pro_life' AND ${RUNNING}) AS lifetime
+       FROM purchases AS yearly WHERE subscription_id = ?1 AND product = 'pro_year' AND refunded_at IS NULL`,
+    )
+    .bind(subscriptionId)
+    .first<{ id: string; lifetime: number }>();
+  return row ? { id: row.id, lifetime: row.lifetime === 1 } : null;
+}
+
+/** Asks for a yearly plan's renewal to be set again from what the account has now; its ID, unless other work holds the row. */
+export async function askYearlySync(db: D1Database, id: string): Promise<string[]> {
+  const { results } = await askRenewalSync(db, `id = ?1`, id).all<{ id: string }>();
   return results.map((row) => row.id);
 }
 

@@ -146,7 +146,7 @@ Cloudflare's resolver; a lookup that fails is "do not know", never "no".
   is deleted at the next check. A hostname that no claim names any more (a
   domain disconnected or replaced, also while a check was making it) goes
   into `stale_hostnames` in the same transaction that lets the claim go
-  (or, for one let go, before the claim lets go of it), and leaves it only
+  (for one let go, the one whose code it still has), and leaves it only
   once Cloudflare has deleted it, or a claim on the same name holds it
   again, checked in the statement that takes it off; claims on one name
   share its one hostname, so one letting go never deletes it from under
@@ -242,6 +242,14 @@ Decided 2026-11-25:
   metadata), on again once it has none, if it was turned off for it. So
   however purchases and refunds follow each other, also while one is being
   applied, the last one decides. A renewal the owner turned off stays off.
+  A yearly plan whose renewal went unpaid past its grace is set too, since
+  Stripe may still be paid for it. Each change is noted on the row under
+  its idempotency key before it is sent (`pending_write`); one whose answer
+  was lost is sent again under that key before anything else, until Stripe
+  answers with what it did rather than that it is still at it, so no change
+  still on its way can undo a later one. And whenever Stripe tells of a
+  subscription change, a yearly plan whose renewal is at odds with the
+  account's Pro for life is set again.
 - **No paying twice**: an account has one open Checkout Session; starting
   another expires the one before. A payment that still arrives for
   something the account already has is refunded at once (a duplicate

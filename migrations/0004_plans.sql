@@ -31,11 +31,15 @@ CREATE TABLE purchases (
   -- under its pending_lease, so two do not do it at once, and one that must
   -- try again sets it to when it tried, behind work not tried since.
   -- pending_rev counts each time it was asked for, so a request that was
-  -- at it when it was asked again does it once more.
+  -- at it when it was asked again does it once more. pending_write is the
+  -- idempotency key of a renewal change sent to Stripe whose answer is not
+  -- known yet: it is sent again under that key, which Stripe answers with
+  -- what it did or that it is still at it, before anything else is done.
   pending TEXT CHECK (pending IN ('refund', 'sync_renewal', 'refund_failed')),
   pending_at INTEGER,
   pending_lease TEXT,
-  pending_rev INTEGER NOT NULL DEFAULT 0
+  pending_rev INTEGER NOT NULL DEFAULT 0,
+  pending_write TEXT CHECK (pending_write GLOB 'renewal-stop-*' OR pending_write GLOB 'renewal-resume-*')
 ) STRICT;
 CREATE INDEX purchases_pending ON purchases (pending_at) WHERE pending IS NOT NULL;
 CREATE INDEX purchases_user ON purchases (user_id);

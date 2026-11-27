@@ -204,25 +204,15 @@ export async function forgetHeldHostname(db: D1Database, cfId: string): Promise<
     .run();
 }
 
-/**
- * Records a check's result: "saved"; "taken" when turning active failed
- * because another site took the same name first (the claim stays pending,
- * with that as its error); "deleting" when the custom hostname it found is
- * being deleted at Cloudflare, so it was not taken up, and nothing saved;
- * or "gone" when the claim was disconnected or replaced while the check
- * ran, so nothing was saved.
- */
-export async function saveDomainCheck(
-  db: D1Database,
-  siteId: string,
-  code: string,
-  changes: Partial<
-    Pick<
-      DomainRecord,
-      "status" | "cfId" | "sslStatus" | "registeredAt" | "cfHttpPath" | "cfHttpBody" | "stalledAt" | "error" | "checkedAt" | "verifiedAt" | "lostAt"
-    >
-  >,
-): Promise<"saved" | "taken" | "deleting" | "gone"> {
+export type DomainCheck = Partial<
+  Pick<
+    DomainRecord,
+    "status" | "cfId" | "sslStatus" | "registeredAt" | "cfHttpPath" | "cfHttpBody" | "stalledAt" | "error" | "checkedAt" | "verifiedAt" | "lostAt"
+  >
+>;
+
+/** The statement that records a check's result on the claim with this code; see saveDomainCheck. */
+function checkStatement(db: D1Database, siteId: string, code: string, changes: DomainCheck): D1PreparedStatement {
   const columns: Record<string, string> = {
     status: "status",
     cfId: "cf_id",
@@ -250,12 +240,26 @@ export async function saveDomainCheck(
     values.push(changes.cfId);
     unlisted = ` AND NOT EXISTS (SELECT 1 FROM stale_hostnames WHERE cf_id = ?${values.length} AND deleting_at IS NOT NULL)`;
   }
+  // The code keeps a check that raced a new claim from writing over it.
+  return db.prepare(`UPDATE domains SET ${sets.join(", ")} WHERE site_id = ?1 AND code = ?2${unlisted}`).bind(...values);
+}
+
+/**
+ * Records a check's result: "saved"; "taken" when turning active failed
+ * because another site took the same name first (the claim stays pending,
+ * with that as its error); "deleting" when the custom hostname it found is
+ * being deleted at Cloudflare, so it was not taken up, and nothing saved;
+ * or "gone" when the claim was disconnected or replaced while the check
+ * ran, so nothing was saved.
+ */
+export async function saveDomainCheck(
+  db: D1Database,
+  siteId: string,
+  code: string,
+  changes: DomainCheck,
+): Promise<"saved" | "taken" | "deleting" | "gone"> {
   try {
-    // The code keeps a check that raced a new claim from writing over it.
-    const result = await db
-      .prepare(`UPDATE domains SET ${sets.join(", ")} WHERE site_id = ?1 AND code = ?2${unlisted}`)
-      .bind(...values)
-      .run();
+    const result = await checkStatement(db, siteId, code, changes).run();
     if (result.meta.changes > 0) return "saved";
     const claimed = await db.prepare(`SELECT 1 FROM domains WHERE site_id = ?1 AND code = ?2`).bind(siteId, code).first();
     return claimed && changes.cfId ? "deleting" : "gone";
@@ -267,6 +271,29 @@ export async function saveDomainCheck(
       .run();
     return result.meta.changes > 0 ? "taken" : "gone";
   }
+}
+
+/**
+ * Lets a claim go of its custom hostname, recording the check's result: the
+ * hostname goes on the list to delete at Cloudflare in the same transaction
+ * that the claim (by its code) stops naming it, so the hourly cleanup never
+ * finds it neither listed nor named. "gone" when the claim was disconnected
+ * or replaced meanwhile, whose hostname is listed all the same.
+ */
+export async function letGoOfHostname(
+  db: D1Database,
+  siteId: string,
+  code: string,
+  hostname: { cfId: string; name: string },
+  changes: DomainCheck & { checkedAt: number },
+): Promise<"saved" | "gone"> {
+  const [, saved] = await db.batch([
+    db
+      .prepare(`INSERT INTO stale_hostnames (cf_id, hostname, created_at) VALUES (?1, ?2, ?3) ON CONFLICT DO NOTHING`)
+      .bind(hostname.cfId, hostname.name, changes.checkedAt),
+    checkStatement(db, siteId, code, { ...changes, cfId: null }),
+  ]);
+  return saved!.meta.changes > 0 ? "saved" : "gone";
 }
 
 /** Deletes a site's claim; its custom hostname, as it is at that moment, goes on the list to delete at Cloudflare. */
