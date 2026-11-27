@@ -145,11 +145,15 @@ Cloudflare's resolver; a lookup that fails is "do not know", never "no".
   pointing here is deleted a week later, and one whose owner's plan ended
   is deleted at the next check. A hostname that no claim names any more (a
   domain disconnected or replaced, also while a check was making it) goes
-  into `stale_hostnames` in the same transaction that lets the claim go,
-  and leaves it only once Cloudflare has deleted it, or a claim on the same
-  name holds it again, checked in the statement that takes it off; claims
-  on one name share its one hostname, so one letting go never deletes it
-  from under another. Without `CF_ZONE_ID` and the `CF_API_TOKEN`
+  into `stale_hostnames` in the same transaction that lets the claim go
+  (or, for one let go, before the claim lets go of it), and leaves it only
+  once Cloudflare has deleted it, or a claim on the same name holds it
+  again, checked in the statement that takes it off; claims on one name
+  share its one hostname, so one letting go never deletes it from under
+  another. Deleting one starts only while no claim holds it, in one
+  statement, and from then until a day after it was deleted no check may
+  take it up (Cloudflare finds a name's existing hostname), so no domain
+  is left on a deleted one; the next check makes it anew. Without `CF_ZONE_ID` and the `CF_API_TOKEN`
   secret (local, staging) none is made and a domain is served as soon as
   its DNS points here.
 - **Checks**: at once when claimed, every 20 seconds while the editor is
@@ -213,12 +217,13 @@ Decided 2026-11-25:
   together. The one statement that records a purchase also decides whether
   the account already had what it gives, so two requests for one session
   record it once and never take it for a duplicate. What is still to be
-  done at Stripe (a duplicate's refund, stopping the yearly plan, letting it
-  renew again) is kept on the row and done by one request at a time; one
-  that fails half way is finished by the next delivery or the hourly job,
-  which takes work never tried first, then what waited longest, so work
-  that keeps failing or a refund Stripe takes days over never holds up
-  newer work.
+  done at Stripe (a duplicate's refund, a yearly plan's renewal) is kept on
+  the row and done by one request at a time, which holds it for five
+  minutes from when it takes it and finishes it only while still holding
+  it; work asked for again meanwhile is done again. One that fails half way
+  is finished by the next delivery or the hourly job, which takes work
+  never tried first, then what waited longest, so work that keeps failing
+  or a refund Stripe takes days over never holds up newer work.
 - **Refunds are followed to the end**: a duplicate is done once refunds
   have given back the whole payment, whoever made them (part given back by
   hand before counts, and the rest is refunded); one still settling is
@@ -229,11 +234,14 @@ Decided 2026-11-25:
   first answer, an error too, for a day. A refund Stripe fails (a closed
   card) leaves the purchase `pending = 'refund_failed'`, logged, for paying
   back by hand: `SELECT * FROM purchases WHERE pending = 'refund_failed'`.
-- **Pro for life taken back** (refund, lost chargeback) lets the yearly
-  plan renew again: before it was stopped, it is left alone; once stopped
-  (marked `stopped_for` the purchase in the subscription's metadata), also
-  while it was being stopped, it renews again. One the owner stopped
-  themselves stays stopped.
+- **The yearly plan's renewal follows Pro for life**: buying Pro for life,
+  or having it taken back (refund, lost chargeback), asks each of the
+  account's yearly plans, on its own row (`pending = 'sync_renewal'`), to
+  have its renewal set from what the account has then: off while it has
+  Pro for life (marked `stopped_for: pro_life` in the subscription's
+  metadata), on again once it has none, if it was turned off for it. So
+  however purchases and refunds follow each other, also while one is being
+  applied, the last one decides. A renewal the owner turned off stays off.
 - **No paying twice**: an account has one open Checkout Session; starting
   another expires the one before. A payment that still arrives for
   something the account already has is refunded at once (a duplicate

@@ -10,11 +10,12 @@ import {
   domainsToCheck,
   dropDomain,
   forgetHeldHostname,
-  forgetStaleHostname,
-  hostnameHeld,
+  hostnameDeleted,
   orphanedHostnames,
+  pruneDeletedHostnames,
   queueStaleHostname,
   saveDomainCheck,
+  startDeletingHostname,
   staleHostnames,
 } from "./db/domains.server";
 import { pointsHere, TXT_PREFIX, txtProof, zoneOf } from "./dns.server";
@@ -29,31 +30,23 @@ import { requireOwnedSite } from "./sites.server";
 const LOST_SECONDS = 7 * 24 * 3600;
 
 /**
- * Deletes a custom hostname at Cloudflare, so it is no longer billed,
- * unless another claim on the same name holds it (`exceptSiteId` is the
- * claim letting go, or null when none is left).
- */
-async function releaseHostname(cfId: string, exceptSiteId: string | null): Promise<void> {
-  if (!saasConfigured() || (await hostnameHeld(env.DB, cfId, exceptSiteId))) return;
-  await removeHostname(cfId);
-}
-
-/**
- * Deletes listed custom hostnames nothing names any more. One a claim has
- * taken up again (the same name connected anew) leaves the list, unless
- * that claim let go meanwhile; one Cloudflare could not delete now stays
- * on it for the hourly run.
+ * Deletes listed custom hostnames nothing names any more. Deleting one
+ * starts only while no claim holds it, and from then no claim takes it up;
+ * one a claim holds again (the same name connected anew) leaves the list,
+ * unless that claim let go meanwhile; one Cloudflare could not delete now
+ * stays on it for the hourly run.
  */
 async function releaseStale(cfIds: readonly string[]): Promise<void> {
   if (!saasConfigured()) return;
   for (const cfId of cfIds) {
     try {
-      if (await hostnameHeld(env.DB, cfId, null)) {
+      const now = Math.floor(Date.now() / 1000);
+      if (!(await startDeletingHostname(env.DB, cfId, now))) {
         await forgetHeldHostname(env.DB, cfId);
         continue;
       }
       await removeHostname(cfId);
-      await forgetStaleHostname(env.DB, cfId);
+      await hostnameDeleted(env.DB, cfId, Math.floor(Date.now() / 1000));
     } catch (error) {
       console.error("stale custom hostname", cfId, error);
     }
@@ -157,8 +150,9 @@ export async function checkDomain(record: DomainRecord, now: number, entitled: b
     await save({});
     return;
   }
+  // The claim's hostname goes on the list to delete before the claim lets go of it, so it is never left unlisted.
   const letGo = async (error: string, stalled = false) => {
-    if (record.cfId) await releaseHostname(record.cfId, record.siteId);
+    if (record.cfId) await queueStaleHostname(env.DB, record.cfId, record.hostname, now);
     await save({
       status: "pending",
       cfId: null,
@@ -171,6 +165,7 @@ export async function checkDomain(record: DomainRecord, now: number, entitled: b
       stalledAt: stalled ? now : null,
       error,
     });
+    if (record.cfId) await releaseStale([record.cfId]);
   };
   /** Something that worked has stopped: a week later it is let go. */
   const lose = async (why: string, changes: Parameters<typeof saveDomainCheck>[3] = {}) => {
@@ -230,6 +225,8 @@ export async function checkDomain(record: DomainRecord, now: number, entitled: b
       await queueStaleHostname(env.DB, hostname.id, record.hostname, now);
       await releaseStale([hostname.id]);
     }
+    // The name's hostname is being deleted: the next check makes it anew.
+    if (saved === "deleting") await save({});
   } catch (error) {
     if (!(error instanceof SaasError)) throw error;
     console.error("custom hostname", record.hostname, error.message);
@@ -322,6 +319,7 @@ export async function removeSiteDomain(siteId: string): Promise<void> {
 export async function checkDomains(now: number): Promise<void> {
   for (const orphan of await orphanedHostnames(env.DB)) await dropDomain(env.DB, orphan.siteId, now);
   await releaseStale(await staleHostnames(env.DB, 50));
+  await pruneDeletedHostnames(env.DB, now - 24 * 3600);
   // Each check is a few DNS, Cloudflare and database calls; 50 an hour stays well inside a run's limits.
   for (const record of await domainsToCheck(env.DB, now, 50)) {
     try {

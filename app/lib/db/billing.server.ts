@@ -104,12 +104,13 @@ export async function purchaseExists(db: D1Database, id: string): Promise<boolea
  * Records a purchase once, however many requests tell of it at the same
  * time. The one statement that records it also decides whether the account
  * already had what it gives (two payment links paid): then it is recorded
- * refunded, with the refund still to make. True when this request recorded
- * it and it gives the account something.
+ * refunded, with the refund still to make. Pro for life also asks, in the
+ * same transaction, for the account's yearly plans to stop renewing. True
+ * when this request recorded it and it gives the account something.
  */
 export async function claimPurchase(db: D1Database, purchase: NewPurchase): Promise<boolean> {
   const covering = COVERED_BY[purchase.product].map((product) => `'${product}'`).join(", ");
-  const row = await db
+  const claim = db
     .prepare(
       `WITH earlier AS (
          SELECT EXISTS (SELECT 1 FROM purchases WHERE user_id = ?2 AND product IN (${covering}) AND ${RUNNING}) AS covered
@@ -117,7 +118,7 @@ export async function claimPurchase(db: D1Database, purchase: NewPurchase): Prom
        INSERT INTO purchases (id, user_id, product, customer_id, subscription_id, payment_intent_id, amount, currency, created_at, ends_at, refunded_at, pending)
        SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10,
          CASE WHEN ?11 OR covered THEN ?9 END,
-         CASE WHEN ?11 THEN NULL WHEN covered THEN 'refund' WHEN ?3 = 'pro_life' THEN 'stop_yearly' END
+         CASE WHEN covered AND NOT ?11 THEN 'refund' END
        FROM earlier WHERE true
        ON CONFLICT DO NOTHING
        RETURNING refunded_at`,
@@ -134,71 +135,90 @@ export async function claimPurchase(db: D1Database, purchase: NewPurchase): Prom
       purchase.now,
       purchase.endsAt,
       purchase.takenBack ? 1 : 0,
-    )
-    .first<{ refunded_at: number | null }>();
-  return row !== null && row.refunded_at === null;
-}
-
-/** How long a request may take to make a purchase's Stripe calls before another may try. */
-const PENDING_LOCK_SECONDS = 120;
-
-/** Work at Stripe a request can take on; 'refund_failed' waits for a person. */
-const OPEN_WORK = `pending IN ('refund', 'stop_yearly', 'resume_yearly')`;
-
-export type WorkKind = "refund" | "stop_yearly" | "resume_yearly";
-
-export interface PendingWork {
-  pending: WorkKind;
-  /** Set when the purchase was taken back since. */
-  refundedAt: number | null;
-}
-
-/** Takes on what is still to be done at Stripe for a purchase, unless done, or another request has it. */
-export async function takePending(db: D1Database, id: string, now: number): Promise<PendingWork | null> {
-  const row = await db
-    .prepare(
-      `UPDATE purchases SET pending_at = ?2 + ${PENDING_LOCK_SECONDS}
-       WHERE id = ?1 AND ${OPEN_WORK} AND coalesce(pending_at, 0) <= ?2
-       RETURNING pending, refunded_at`,
-    )
-    .bind(id, now)
-    .first<{ pending: WorkKind; refunded_at: number | null }>();
-  return row ? { pending: row.pending, refundedAt: row.refunded_at } : null;
-}
-
-/** Whether a purchase still has this work to do: it may change while a request does it. */
-export async function stillPending(db: D1Database, id: string, work: WorkKind): Promise<boolean> {
-  return Boolean(await db.prepare(`SELECT 1 FROM purchases WHERE id = ?1 AND pending = ?2`).bind(id, work).first());
+    );
+  const [claimed] = await db.batch(purchase.product === "pro_life" ? [claim, askRenewalSync(db, `user_id = ?1`, purchase.userId)] : [claim]);
+  const row = claimed!.results[0] as { refunded_at: number | null } | undefined;
+  return row !== undefined && row.refunded_at === null;
 }
 
 /**
- * Ends a request's turn at a purchase's Stripe work: "done"; "retry" when
- * it failed or Stripe is still working on it, for the next delivery or the
- * hourly run, behind work not tried since; "failed" when Stripe could not
- * refund, for someone to pay the owner back by hand. Work that changed
- * meanwhile (Pro for life taken back while the yearly plan was stopped) is
- * left for the next turn.
+ * Asks for the yearly plans of the accounts `owners` picks to have their
+ * renewal set again from what the account has now (see renewalWork). Each
+ * ask counts up pending_rev, so a request already at it does it once more.
  */
-export async function endPending(db: D1Database, id: string, work: WorkKind, outcome: "done" | "retry" | "failed", now: number): Promise<void> {
+const askRenewalSync = (db: D1Database, owners: string, value: string) =>
+  db
+    .prepare(
+      `UPDATE purchases SET pending = 'sync_renewal', pending_rev = pending_rev + 1
+       WHERE ${owners} AND subscription_id IS NOT NULL AND ${RUNNING} AND (pending IS NULL OR pending = 'sync_renewal')
+       RETURNING id`,
+    )
+    .bind(value);
+
+/**
+ * How long a request may take to make a purchase's Stripe calls before
+ * another may try: well past what its calls can take, each timing out in 15
+ * seconds.
+ */
+const PENDING_LEASE_SECONDS = 300;
+
+/** Work at Stripe a request can take on; 'refund_failed' waits for a person. */
+const OPEN_WORK = `pending IN ('refund', 'sync_renewal')`;
+
+export interface PendingWork {
+  /** 'refund' a duplicate; 'sync_renewal': set a yearly plan's renewal from what the account has now. */
+  pending: "refund" | "sync_renewal";
+  /** This request's hold on it, which it finishes only while still holding. */
+  lease: string;
+  rev: number;
+  userId: string;
+  subscriptionId: string | null;
+}
+
+/**
+ * Takes on what is still to be done at Stripe for a purchase, unless done,
+ * or another request holds it. `now` is the time it is taken, so the lease
+ * runs from then.
+ */
+export async function takePending(db: D1Database, id: string, now: number): Promise<PendingWork | null> {
+  const lease = crypto.randomUUID();
+  const row = await db
+    .prepare(
+      `UPDATE purchases SET pending_at = ?2 + ${PENDING_LEASE_SECONDS}, pending_lease = ?3
+       WHERE id = ?1 AND ${OPEN_WORK} AND coalesce(pending_at, 0) <= ?2
+       RETURNING pending, pending_rev, user_id, subscription_id`,
+    )
+    .bind(id, now, lease)
+    .first<{ pending: PendingWork["pending"]; pending_rev: number; user_id: string; subscription_id: string | null }>();
+  return row ? { pending: row.pending, lease, rev: row.pending_rev, userId: row.user_id, subscriptionId: row.subscription_id } : null;
+}
+
+/**
+ * Ends a request's turn at a purchase's Stripe work, if it still holds it:
+ * "done", unless the work was asked for again meanwhile, which leaves it for
+ * the next turn; "retry" when it failed or Stripe is still working on it,
+ * for the next delivery or the hourly run, behind work not tried since;
+ * "failed" when Stripe could not refund, for someone to pay the owner back
+ * by hand.
+ */
+export async function endPending(db: D1Database, id: string, work: PendingWork, outcome: "done" | "retry" | "failed", now: number): Promise<void> {
   const statement =
     outcome === "retry"
-      ? db.prepare(`UPDATE purchases SET pending_at = ?2 WHERE id = ?1`).bind(id, now)
+      ? db.prepare(`UPDATE purchases SET pending_at = ?3, pending_lease = NULL WHERE id = ?1 AND pending_lease = ?2`).bind(id, work.lease, now)
       : db
-          .prepare(`UPDATE purchases SET pending = CASE WHEN pending = ?2 THEN ?3 ELSE pending END, pending_at = NULL WHERE id = ?1`)
-          .bind(id, work, outcome === "failed" ? "refund_failed" : null);
+          .prepare(
+            `UPDATE purchases SET pending = CASE WHEN pending_rev = ?3 THEN ?4 ELSE pending END, pending_at = NULL, pending_lease = NULL
+             WHERE id = ?1 AND pending_lease = ?2`,
+          )
+          .bind(id, work.lease, work.rev, outcome === "failed" ? "refund_failed" : null);
   await statement.run();
 }
 
-/** Puts a purchase's work behind the rest, after an attempt that failed before it could take it on. */
-export async function postponePending(db: D1Database, id: string, now: number): Promise<void> {
-  await db.prepare(`UPDATE purchases SET pending_at = ?2 WHERE id = ?1 AND ${OPEN_WORK} AND coalesce(pending_at, 0) <= ?2`).bind(id, now).run();
-}
-
 /**
- * Checkout Sessions with Stripe calls left undone or still settling, for
- * the hourly run: work never tried first, then what waited longest, so
- * refunds Stripe takes days over, or work that keeps failing, never keep
- * newer work from its turn.
+ * Purchases with Stripe calls left undone or still settling, for the hourly
+ * run: work never tried first, then what waited longest, so refunds Stripe
+ * takes days over, or work that keeps failing, never keep newer work from
+ * its turn.
  */
 export async function unfinishedPurchases(db: D1Database, now: number, limit: number): Promise<string[]> {
   const { results } = await db
@@ -207,6 +227,15 @@ export async function unfinishedPurchases(db: D1Database, now: number, limit: nu
        ORDER BY coalesce(pending_at, 0), created_at LIMIT ?2`,
     )
     .bind(now, limit)
+    .all<{ id: string }>();
+  return results.map((row) => row.id);
+}
+
+/** An account's yearly plans whose renewal is still to set. */
+export async function renewalWork(db: D1Database, userId: string): Promise<string[]> {
+  const { results } = await db
+    .prepare(`SELECT id FROM purchases WHERE user_id = ?1 AND pending = 'sync_renewal'`)
+    .bind(userId)
     .all<{ id: string }>();
   return results.map((row) => row.id);
 }
@@ -237,28 +266,15 @@ export async function setSubscriptionEnd(db: D1Database, subscriptionId: string,
 
 /**
  * Ends what a fully refunded payment bought. Pro for life taken back no
- * longer replaces the yearly plan, so the yearly plans it stopped are to
- * renew again; those purchases are returned.
+ * longer replaces the yearly plan, so the account's yearly plans are asked,
+ * in the same transaction, to have their renewal set again; those returned.
  */
-export async function markRefunded(db: D1Database, paymentIntentId: string, now: number): Promise<Array<{ id: string; userId: string }>> {
-  const { results } = await db
-    .prepare(
-      `UPDATE purchases SET refunded_at = ?2, pending = CASE WHEN product = 'pro_life' THEN 'resume_yearly' ELSE pending END
-       WHERE payment_intent_id = ?1 AND refunded_at IS NULL
-       RETURNING id, user_id, pending`,
-    )
-    .bind(paymentIntentId, now)
-    .all<{ id: string; user_id: string; pending: string | null }>();
-  return results.filter((row) => row.pending === "resume_yearly").map((row) => ({ id: row.id, userId: row.user_id }));
-}
-
-/** The account's yearly subscriptions still running, to stop when it buys Pro for life. */
-export async function runningSubscriptions(db: D1Database, userId: string): Promise<string[]> {
-  const { results } = await db
-    .prepare(`SELECT subscription_id FROM purchases WHERE user_id = ?1 AND subscription_id IS NOT NULL AND ${RUNNING}`)
-    .bind(userId)
-    .all<{ subscription_id: string }>();
-  return results.map((row) => row.subscription_id);
+export async function markRefunded(db: D1Database, paymentIntentId: string, now: number): Promise<string[]> {
+  const [, asked] = await db.batch([
+    db.prepare(`UPDATE purchases SET refunded_at = ?2 WHERE payment_intent_id = ?1 AND refunded_at IS NULL`).bind(paymentIntentId, now),
+    askRenewalSync(db, `user_id IN (SELECT user_id FROM purchases WHERE payment_intent_id = ?1 AND product = 'pro_life')`, paymentIntentId),
+  ]);
+  return (asked!.results as Array<{ id: string }>).map((row) => row.id);
 }
 
 /**

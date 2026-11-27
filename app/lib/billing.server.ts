@@ -9,12 +9,11 @@ import {
   endPending,
   finishCheckout,
   markRefunded,
-  postponePending,
+  type PendingWork,
   purchaseExists,
+  renewalWork,
   replaceCheckout,
-  runningSubscriptions,
   setSubscriptionEnd,
-  stillPending,
   takePending,
   unfinishedPurchases,
 } from "./db/billing.server";
@@ -289,7 +288,7 @@ function refundOutcome(status: string): Outcome {
  * key, since Stripe answers a key with its first answer for a day, an error
  * included; it gives back what is left of the payment.
  */
-async function refundDuplicate(session: CheckoutSession, subscription: Subscription | null, now: number): Promise<Outcome> {
+async function refundDuplicate(session: CheckoutSession, subscription: Subscription | null, attempt: string): Promise<Outcome> {
   let paymentIntent = session.payment_intent;
   if (subscription) {
     if (subscription.status !== "canceled" && subscription.status !== "incomplete_expired") {
@@ -322,7 +321,7 @@ async function refundDuplicate(session: CheckoutSession, subscription: Subscript
       "POST",
       "refunds",
       { payment_intent: paymentIntent, reason: "duplicate", metadata: { checkout_session: session.id } },
-      { idempotencyKey: `refund-duplicate-${session.id}-${now}` },
+      { idempotencyKey: `refund-duplicate-${session.id}-${attempt}` },
     );
     return refundOutcome(refund.status);
   } catch (error) {
@@ -332,58 +331,63 @@ async function refundDuplicate(session: CheckoutSession, subscription: Subscript
   }
 }
 
-/**
- * Stops the yearly plans Pro for life replaces from renewing, each marked
- * as stopped for this purchase, so they can renew again should it be taken
- * back. That is checked before each, and should it happen while one is
- * being stopped, the purchase's work turns to resuming them, taken on next.
- * One already stopped (by its owner) is left as it is, and so stays stopped.
- */
-async function stopYearly(lifetimeId: string, userId: string): Promise<void> {
-  for (const id of await runningSubscriptions(env.DB, userId)) {
-    const yearly = await stripe<Subscription>("GET", `subscriptions/${path(id)}`);
-    if (yearly.cancel_at_period_end || yearly.status === "canceled" || yearly.status === "incomplete_expired") continue;
-    if (!(await stillPending(env.DB, lifetimeId, "stop_yearly"))) return;
-    await stripe("POST", `subscriptions/${path(id)}`, { cancel_at_period_end: true, metadata: { stopped_for: lifetimeId } });
-  }
-}
+/** Marks a yearly plan's renewal as turned off by neat.link for Pro for life, not by its owner. */
+const STOPPED_FOR = "stopped_for";
 
-/** Lets the yearly plans a Pro for life purchase stopped renew again, now that it was taken back. */
-async function resumeYearly(lifetimeId: string, userId: string): Promise<void> {
+/**
+ * Sets a yearly plan's renewal from what the account has now: off while it
+ * has Pro for life, marked as turned off for it; on again once it has not,
+ * if it was turned off for it. One its owner turned off stays off.
+ */
+async function syncRenewal(userId: string, subscriptionId: string): Promise<void> {
   const { running } = await billingOf(env.DB, userId);
-  if (running.some((purchase) => purchase.product === "pro_life")) return;
-  for (const id of await runningSubscriptions(env.DB, userId)) {
-    const yearly = await stripe<Subscription>("GET", `subscriptions/${path(id)}`);
-    if (yearly.metadata?.stopped_for !== lifetimeId || !yearly.cancel_at_period_end) continue;
-    if (yearly.status === "canceled" || yearly.status === "incomplete_expired") continue;
-    await stripe("POST", `subscriptions/${path(id)}`, { cancel_at_period_end: false, metadata: { stopped_for: "" } });
+  const lifetime = running.some((purchase) => purchase.product === "pro_life");
+  const yearly = await stripe<Subscription>("GET", `subscriptions/${path(subscriptionId)}`);
+  if (yearly.status === "canceled" || yearly.status === "incomplete_expired") return;
+  const ours = yearly.metadata?.[STOPPED_FOR] === "pro_life";
+  if (lifetime && !yearly.cancel_at_period_end) {
+    await stripe("POST", `subscriptions/${path(subscriptionId)}`, { cancel_at_period_end: true, metadata: { [STOPPED_FOR]: "pro_life" } });
+  } else if (!lifetime && ours) {
+    await stripe("POST", `subscriptions/${path(subscriptionId)}`, { cancel_at_period_end: false, metadata: { [STOPPED_FOR]: "" } });
   }
 }
 
+const clock = () => Math.floor(Date.now() / 1000);
+
 /**
- * Makes the Stripe calls a recorded purchase still needs: the refund of a
- * duplicate (`refund`, null where the Checkout Session is not at hand, which
- * leaves it for later), or stopping the yearly plans Pro for life replaces,
- * or letting them renew again once it was taken back. One request at a time
- * takes them on; what is left goes to the next delivery or the hourly run.
+ * Makes the Stripe calls a purchase still needs: the refund of a duplicate
+ * (by `refund`, given the attempt's own key; null where the Checkout
+ * Session is not at hand, which leaves it for later), or setting a yearly
+ * plan's renewal. One request at a time holds the work, from when it takes
+ * it; work asked for again meanwhile is done again; what is left goes to the
+ * next delivery or the hourly run.
  */
-async function finishPurchase(id: string, userId: string, now: number, refund: (() => Promise<Outcome>) | null): Promise<void> {
-  // The work may change while it is done; what it turned to is taken on next.
+async function finishWork(id: string, refund: ((attempt: string) => Promise<Outcome>) | null): Promise<void> {
   for (let turn = 0; turn < 3; turn++) {
-    const work = await takePending(env.DB, id, now);
+    const work: PendingWork | null = await takePending(env.DB, id, clock());
     if (!work) return;
     let outcome: Outcome = "done";
     try {
-      if (work.pending === "refund") outcome = refund ? await refund() : "retry";
-      else if (work.pending === "resume_yearly") await resumeYearly(id, userId);
-      else if (work.refundedAt === null) await stopYearly(id, userId);
+      if (work.pending === "refund") outcome = refund ? await refund(work.lease) : "retry";
+      else if (work.subscriptionId) await syncRenewal(work.userId, work.subscriptionId);
     } catch (error) {
-      await endPending(env.DB, id, work.pending, "retry", now);
+      await endPending(env.DB, id, work, "retry", clock());
       throw error;
     }
     if (outcome === "failed") console.error("Stripe could not refund a duplicate payment: pay it back by hand", id);
-    await endPending(env.DB, id, work.pending, outcome, now);
+    await endPending(env.DB, id, work, outcome, clock());
     if (outcome !== "done") return;
+  }
+}
+
+/** Sets the renewal of an account's yearly plans still to set, now; what fails is left for the hourly run. */
+async function syncRenewals(ids: readonly string[]): Promise<void> {
+  for (const id of ids) {
+    try {
+      await finishWork(id, null);
+    } catch (error) {
+      console.error("yearly plan renewal", id, error);
+    }
   }
 }
 
@@ -423,7 +427,9 @@ export async function fulfilCheckout(session: CheckoutSession, now: number): Pro
       now,
     });
   }
-  await finishPurchase(session.id, userId, now, async () => refundDuplicate(session, await subscription(), now));
+  await finishWork(session.id, async (attempt) => refundDuplicate(session, await subscription(), attempt));
+  // Pro for life stops the yearly plans renewing.
+  if (product === "pro_life") await syncRenewals(await renewalWork(env.DB, userId));
   return gave;
 }
 
@@ -432,23 +438,20 @@ export async function finishPendingPurchases(now: number): Promise<void> {
   if (!stripeConfigured()) return;
   for (const id of await unfinishedPurchases(env.DB, now, 20)) {
     try {
-      await fulfilCheckout(await stripe<CheckoutSession>("GET", `checkout/sessions/${path(id)}`), now);
+      await finishWork(id, async (attempt) => {
+        const session = await stripe<CheckoutSession>("GET", `checkout/sessions/${path(id)}`);
+        const subscription = session.subscription ? await stripe<Subscription>("GET", `subscriptions/${path(session.subscription)}`) : null;
+        return refundDuplicate(session, subscription, attempt);
+      });
     } catch (error) {
       console.error("pending purchase", id, error);
-      await postponePending(env.DB, id, now);
     }
   }
 }
 
-/** Ends what a payment taken back bought. Yearly plans that Pro for life stopped renew again, now, or in the hourly run. */
+/** Ends what a payment taken back bought. Yearly plans stopped for Pro for life renew again, now, or in the hourly run. */
 async function takeBack(paymentIntent: string, now: number): Promise<void> {
-  for (const purchase of await markRefunded(env.DB, paymentIntent, now)) {
-    try {
-      await finishPurchase(purchase.id, purchase.userId, now, null);
-    } catch (error) {
-      console.error("resuming yearly plans", purchase.id, error);
-    }
-  }
+  await syncRenewals(await markRefunded(env.DB, paymentIntent, now));
 }
 
 /**

@@ -196,13 +196,14 @@ describe.skipIf(!live)("Stripe test mode", () => {
       const id = `cs_live_life_${Date.now().toString(36)}`;
       expect(await fulfilCheckout(paidSession(id, "pro_life", { payment_intent: life.id }), now())).toBe(true);
       type Plan = { cancel_at_period_end: boolean; metadata: Record<string, string> };
-      expect(await stripe<Plan>("GET", `subscriptions/${subscription.id}`)).toMatchObject({ cancel_at_period_end: true, metadata: { stopped_for: id } });
+      expect(await stripe<Plan>("GET", `subscriptions/${subscription.id}`)).toMatchObject({ cancel_at_period_end: true, metadata: { stopped_for: "pro_life" } });
       await stripe("POST", "refunds", { payment_intent: life.id });
       await handleStripeEvent({ id: "evt_live", type: "charge.refunded", data: { object: { refunded: true, payment_intent: life.id } } }, now());
       const resumed = await stripe<Plan>("GET", `subscriptions/${subscription.id}`);
       expect(resumed.cancel_at_period_end).toBe(false);
       expect(resumed.metadata.stopped_for).toBeUndefined();
       expect(await purchase(id)).toMatchObject({ refunded_at: expect.any(Number), pending: null });
+      expect(await purchase("cs_live_year")).toMatchObject({ pending: null });
     } finally {
       await stripe("DELETE", `customers/${customer.id}`);
     }

@@ -23,14 +23,19 @@ CREATE TABLE purchases (
   refunded_at INTEGER,
   -- What is still to be done at Stripe for it: 'refund' all of a payment
   -- for what the account already had, followed until Stripe has made it;
-  -- 'stop_yearly' plans that Pro for life replaces, or 'resume_yearly' them
-  -- once Pro for life was taken back. 'refund_failed': Stripe could not
-  -- make the refund, so the owner is paid back by hand. Null once done.
-  -- pending_at is when it may next be taken on: a request taking it on sets
-  -- it a while ahead, so two do not do it at once, and one that must try
-  -- again sets it to when it tried, behind work not tried since.
-  pending TEXT CHECK (pending IN ('refund', 'stop_yearly', 'resume_yearly', 'refund_failed')),
-  pending_at INTEGER
+  -- 'sync_renewal' (a yearly plan's) set its renewal from what the account
+  -- has now: off while it has Pro for life, on again after if neat.link
+  -- turned it off. 'refund_failed': Stripe could not make the refund, so
+  -- the owner is paid back by hand. Null once done. pending_at is when it
+  -- may next be taken on: a request taking it on holds it a while ahead,
+  -- under its pending_lease, so two do not do it at once, and one that must
+  -- try again sets it to when it tried, behind work not tried since.
+  -- pending_rev counts each time it was asked for, so a request that was
+  -- at it when it was asked again does it once more.
+  pending TEXT CHECK (pending IN ('refund', 'sync_renewal', 'refund_failed')),
+  pending_at INTEGER,
+  pending_lease TEXT,
+  pending_rev INTEGER NOT NULL DEFAULT 0
 ) STRICT;
 CREATE INDEX purchases_pending ON purchases (pending_at) WHERE pending IS NOT NULL;
 CREATE INDEX purchases_user ON purchases (user_id);
@@ -130,12 +135,16 @@ DROP TABLE domains;
 ALTER TABLE domains_next RENAME TO domains;
 
 -- Custom hostnames at Cloudflare that no claim holds any more: of a domain
--- disconnected or replaced, or made while it was. Each stays here until
--- Cloudflare has deleted it, so none is left billed.
+-- disconnected, replaced or let go, or made while it was. Each stays here
+-- until Cloudflare has deleted it, so none is left billed. deleting_at:
+-- since then it is being deleted, and no claim may take it up; deleted_at:
+-- deleted, kept a day so a check that found it just before cannot either.
 CREATE TABLE stale_hostnames (
   cf_id TEXT PRIMARY KEY,
   hostname TEXT NOT NULL,
-  created_at INTEGER NOT NULL
+  created_at INTEGER NOT NULL,
+  deleting_at INTEGER,
+  deleted_at INTEGER
 ) STRICT;
 
 -- Files an account uploaded to embed in its pages, kept in the MEDIA bucket.

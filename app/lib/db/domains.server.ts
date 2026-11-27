@@ -159,13 +159,37 @@ export async function queueStaleHostname(db: D1Database, cfId: string, hostname:
 
 /** Custom hostnames still to delete at Cloudflare, oldest first. */
 export async function staleHostnames(db: D1Database, limit: number): Promise<string[]> {
-  const { results } = await db.prepare(`SELECT cf_id FROM stale_hostnames ORDER BY created_at LIMIT ?1`).bind(limit).all<{ cf_id: string }>();
+  const { results } = await db
+    .prepare(`SELECT cf_id FROM stale_hostnames WHERE deleted_at IS NULL ORDER BY created_at LIMIT ?1`)
+    .bind(limit)
+    .all<{ cf_id: string }>();
   return results.map((row) => row.cf_id);
 }
 
-/** A custom hostname deleted at Cloudflare. */
-export async function forgetStaleHostname(db: D1Database, cfId: string): Promise<void> {
-  await db.prepare(`DELETE FROM stale_hostnames WHERE cf_id = ?1`).bind(cfId).run();
+/**
+ * Starts deleting a listed custom hostname, should no claim hold it, in one
+ * statement: from then no claim may take it up (see saveDomainCheck), so
+ * none is left naming a hostname Cloudflare deleted. True when started.
+ */
+export async function startDeletingHostname(db: D1Database, cfId: string, now: number): Promise<boolean> {
+  const result = await db
+    .prepare(
+      `UPDATE stale_hostnames SET deleting_at = coalesce(deleting_at, ?2)
+       WHERE cf_id = ?1 AND deleted_at IS NULL AND NOT EXISTS (SELECT 1 FROM domains WHERE cf_id = ?1)`,
+    )
+    .bind(cfId, now)
+    .run();
+  return result.meta.changes > 0;
+}
+
+/** A custom hostname deleted at Cloudflare: kept a day, so a check that found it just before cannot take it up. */
+export async function hostnameDeleted(db: D1Database, cfId: string, now: number): Promise<void> {
+  await db.prepare(`UPDATE stale_hostnames SET deleted_at = ?2 WHERE cf_id = ?1`).bind(cfId, now).run();
+}
+
+/** Forgets custom hostnames deleted at Cloudflare before then. */
+export async function pruneDeletedHostnames(db: D1Database, before: number): Promise<void> {
+  await db.prepare(`DELETE FROM stale_hostnames WHERE deleted_at <= ?1`).bind(before).run();
 }
 
 /**
@@ -174,14 +198,19 @@ export async function forgetStaleHostname(db: D1Database, cfId: string): Promise
  * claim letting go meanwhile leaves it listed.
  */
 export async function forgetHeldHostname(db: D1Database, cfId: string): Promise<void> {
-  await db.prepare(`DELETE FROM stale_hostnames WHERE cf_id = ?1 AND EXISTS (SELECT 1 FROM domains WHERE cf_id = ?1)`).bind(cfId).run();
+  await db
+    .prepare(`DELETE FROM stale_hostnames WHERE cf_id = ?1 AND deleting_at IS NULL AND EXISTS (SELECT 1 FROM domains WHERE cf_id = ?1)`)
+    .bind(cfId)
+    .run();
 }
 
 /**
  * Records a check's result: "saved"; "taken" when turning active failed
  * because another site took the same name first (the claim stays pending,
- * with that as its error); or "gone" when the claim was disconnected or
- * replaced while the check ran, so nothing was saved.
+ * with that as its error); "deleting" when the custom hostname it found is
+ * being deleted at Cloudflare, so it was not taken up, and nothing saved;
+ * or "gone" when the claim was disconnected or replaced while the check
+ * ran, so nothing was saved.
  */
 export async function saveDomainCheck(
   db: D1Database,
@@ -193,7 +222,7 @@ export async function saveDomainCheck(
       "status" | "cfId" | "sslStatus" | "registeredAt" | "cfHttpPath" | "cfHttpBody" | "stalledAt" | "error" | "checkedAt" | "verifiedAt" | "lostAt"
     >
   >,
-): Promise<"saved" | "taken" | "gone"> {
+): Promise<"saved" | "taken" | "deleting" | "gone"> {
   const columns: Record<string, string> = {
     status: "status",
     cfId: "cf_id",
@@ -215,10 +244,21 @@ export async function saveDomainCheck(
     sets.push(`${columns[field]} = ?${values.length}`);
   }
   if (sets.length === 0) sets.push("site_id = site_id");
+  // A hostname being deleted is never taken up, checked in the same statement.
+  let unlisted = "";
+  if (changes.cfId) {
+    values.push(changes.cfId);
+    unlisted = ` AND NOT EXISTS (SELECT 1 FROM stale_hostnames WHERE cf_id = ?${values.length} AND deleting_at IS NOT NULL)`;
+  }
   try {
     // The code keeps a check that raced a new claim from writing over it.
-    const result = await db.prepare(`UPDATE domains SET ${sets.join(", ")} WHERE site_id = ?1 AND code = ?2`).bind(...values).run();
-    return result.meta.changes > 0 ? "saved" : "gone";
+    const result = await db
+      .prepare(`UPDATE domains SET ${sets.join(", ")} WHERE site_id = ?1 AND code = ?2${unlisted}`)
+      .bind(...values)
+      .run();
+    if (result.meta.changes > 0) return "saved";
+    const claimed = await db.prepare(`SELECT 1 FROM domains WHERE site_id = ?1 AND code = ?2`).bind(siteId, code).first();
+    return claimed && changes.cfId ? "deleting" : "gone";
   } catch (error) {
     if (!String(error).includes("UNIQUE")) throw error;
     const result = await db
@@ -227,19 +267,6 @@ export async function saveDomainCheck(
       .run();
     return result.meta.changes > 0 ? "taken" : "gone";
   }
-}
-
-/**
- * Whether a claim other than this site's holds a custom hostname. Claims
- * for one name share Cloudflare's one hostname for it, so one claim letting
- * go must not delete it from under another. With no site, any claim counts.
- */
-export async function hostnameHeld(db: D1Database, cfId: string, exceptSiteId: string | null): Promise<boolean> {
-  const row = await db
-    .prepare(`SELECT 1 FROM domains WHERE cf_id = ?1 AND (?2 IS NULL OR site_id != ?2) LIMIT 1`)
-    .bind(cfId, exceptSiteId)
-    .first();
-  return Boolean(row);
 }
 
 /** Deletes a site's claim; its custom hostname, as it is at that moment, goes on the list to delete at Cloudflare. */
